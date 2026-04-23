@@ -1,0 +1,9 @@
+.DS_Store
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+
+# swe-team: per-run state is local audit trail, not source
+.claude/swe-team/runs/*
+!.claude/swe-team/runs/.gitkeep

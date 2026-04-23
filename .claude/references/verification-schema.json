@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://swe-team.dev/schemas/verification.json",
+  "title": "swe-team verification evidence",
+  "description": "Evidence object attached to a verification event. Shape depends on tier.",
+  "oneOf": [
+    { "$ref": "#/$defs/mech" },
+    { "$ref": "#/$defs/sem" },
+    { "$ref": "#/$defs/pr_gate" }
+  ],
+  "$defs": {
+    "mech": {
+      "title": "Mechanical tier evidence",
+      "type": "object",
+      "required": [
+        "commit_sha",
+        "test_exit",
+        "test_output_sha256",
+        "assertion_count",
+        "assertion_baseline",
+        "deleted_test_files",
+        "new_skip_or_only_count",
+        "lint_exit",
+        "typecheck_exit"
+      ],
+      "properties": {
+        "commit_sha": { "type": "string", "pattern": "^[0-9a-f]{7,40}$" },
+        "test_exit": { "type": "integer" },
+        "test_output_sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "assertion_count": { "type": "integer", "minimum": 0 },
+        "assertion_baseline": { "type": "integer", "minimum": 0 },
+        "deleted_test_files": { "type": "array", "items": { "type": "string" } },
+        "new_skip_or_only_count": { "type": "integer", "minimum": 0 },
+        "lint_exit": { "type": "integer" },
+        "typecheck_exit": { "type": "integer" },
+        "reason": { "type": "string" },
+        "flaky_retries": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "sem": {
+      "title": "Semantic tier evidence (per-commit)",
+      "type": "object",
+      "required": [
+        "commit_sha",
+        "acceptance_met",
+        "acceptance_missing",
+        "scope_diff_clean",
+        "out_of_scope_files",
+        "reasoning_cites_evidence",
+        "reasoning"
+      ],
+      "properties": {
+        "commit_sha": { "type": "string", "pattern": "^[0-9a-f]{7,40}$" },
+        "acceptance_met": { "type": "array", "items": { "type": "string" } },
+        "acceptance_missing": { "type": "array", "items": { "type": "string" } },
+        "scope_diff_clean": { "type": "boolean" },
+        "out_of_scope_files": { "type": "array", "items": { "type": "string" } },
+        "reasoning_cites_evidence": { "type": "boolean" },
+        "reasoning": { "type": "string", "maxLength": 500 }
+      },
+      "additionalProperties": false
+    },
+    "pr_gate": {
+      "title": "Whole-PR semantic sweep",
+      "type": "object",
+      "required": ["requirement_coverage_pct", "cross_task_conflicts", "drift_notes"],
+      "properties": {
+        "requirement_coverage_pct": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "cross_task_conflicts": { "type": "array", "items": { "type": "string" } },
+        "drift_notes": { "type": "string", "maxLength": 1000 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

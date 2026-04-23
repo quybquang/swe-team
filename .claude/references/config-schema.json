@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://swe-team.dev/schemas/config.json",
+  "title": "swe-team.config.json",
+  "description": "Per-project configuration. Checked into the repo. See SPEC.md §10.",
+  "type": "object",
+  "required": ["version", "models", "budget", "limits", "branch", "verification", "phases", "gh"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "type": "string" },
+    "models": {
+      "type": "object",
+      "required": ["lead", "coder", "verifier_mech", "verifier_sem", "pr"],
+      "properties": {
+        "lead":          { "enum": ["opus", "sonnet", "haiku", "inherit"] },
+        "coder":         { "enum": ["opus", "sonnet", "haiku", "inherit"] },
+        "verifier_mech": { "enum": ["opus", "sonnet", "haiku", "inherit"] },
+        "verifier_sem":  { "enum": ["opus", "sonnet", "haiku", "inherit"] },
+        "pr":            { "enum": ["opus", "sonnet", "haiku", "inherit"] }
+      },
+      "additionalProperties": false
+    },
+    "budget": {
+      "type": "object",
+      "required": ["max_tokens", "max_usd", "warn_pct"],
+      "properties": {
+        "max_tokens": { "type": "integer", "minimum": 10000 },
+        "max_usd":    { "type": "number",  "minimum": 0.5 },
+        "warn_pct":   { "type": "integer", "minimum": 1, "maximum": 99 }
+      },
+      "additionalProperties": false
+    },
+    "limits": {
+      "type": "object",
+      "required": [
+        "max_iterations",
+        "max_replans",
+        "stuck_identical_output",
+        "stuck_file_churn",
+        "max_files_per_task",
+        "max_plan_tasks",
+        "max_plan_loc"
+      ],
+      "properties": {
+        "max_iterations": {
+          "type": "object",
+          "required": ["S", "M", "L"],
+          "properties": {
+            "S": { "type": "integer", "minimum": 1 },
+            "M": { "type": "integer", "minimum": 1 },
+            "L": { "type": "integer", "minimum": 1 }
+          },
+          "additionalProperties": false
+        },
+        "max_replans":            { "type": "integer", "minimum": 0 },
+        "stuck_identical_output": { "type": "integer", "minimum": 2 },
+        "stuck_file_churn":       { "type": "integer", "minimum": 2 },
+        "max_files_per_task":     { "type": "integer", "minimum": 1 },
+        "max_plan_tasks":         { "type": "integer", "minimum": 1 },
+        "max_plan_loc":           { "type": "integer", "minimum": 50 }
+      },
+      "additionalProperties": false
+    },
+    "branch": {
+      "type": "object",
+      "required": ["base", "prefix", "auto_detect_base"],
+      "properties": {
+        "base":             { "type": "string" },
+        "prefix":           { "type": "string" },
+        "auto_detect_base": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "verification": {
+      "type": "object",
+      "required": ["test_cmd", "lint_cmd", "typecheck_cmd", "test_globs", "allow_flaky_retry"],
+      "properties": {
+        "test_cmd":          { "type": "string" },
+        "lint_cmd":          { "type": "string" },
+        "typecheck_cmd":     { "type": "string" },
+        "test_globs":        { "type": "array", "items": { "type": "string" } },
+        "allow_flaky_retry": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "phases": {
+      "type": "object",
+      "required": ["define_threshold", "force_define", "skip_define"],
+      "properties": {
+        "define_threshold": { "type": "integer", "minimum": 0 },
+        "force_define":     { "type": "boolean" },
+        "skip_define":      { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "gh": {
+      "type": "object",
+      "required": ["pr_labels", "pr_draft", "require_clean_working_tree"],
+      "properties": {
+        "pr_labels":                  { "type": "array", "items": { "type": "string" } },
+        "pr_draft":                   { "type": "boolean" },
+        "require_clean_working_tree": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

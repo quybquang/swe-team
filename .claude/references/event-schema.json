@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://swe-team.dev/schemas/event.json",
+  "title": "swe-team event",
+  "description": "Single event in events.jsonl, build/task-*.jsonl, or verification.jsonl. One line per event.",
+  "type": "object",
+  "required": ["kind", "ts", "run_id", "agent"],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": [
+        "phase_enter",
+        "phase_exit",
+        "action",
+        "observation",
+        "verification",
+        "blocker",
+        "replan",
+        "budget_warn",
+        "budget_stop",
+        "stuck",
+        "run_complete",
+        "run_abort"
+      ]
+    },
+    "ts": { "type": "string", "format": "date-time" },
+    "run_id": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}-[a-z0-9-]+$" },
+    "agent": {
+      "type": "string",
+      "enum": ["swe-lead", "swe-coder", "swe-verifier-mech", "swe-verifier-sem", "swe-pr", "system"]
+    },
+    "task_id": { "type": "string", "pattern": "^T[0-9]+$" },
+    "phase": { "type": "string", "enum": ["DEFINE", "PLAN", "BUILD", "VERIFY", "SHIP"] },
+    "ok": { "type": "boolean" },
+    "tool": { "type": "string" },
+    "target": { "type": "string" },
+    "args_summary": { "type": "string", "maxLength": 500 },
+    "exit_code": { "type": "integer" },
+    "stdout_sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "summary": { "type": "string", "maxLength": 500 },
+    "tier": { "type": "string", "enum": ["mech", "sem"] },
+    "verified": { "type": "boolean" },
+    "evidence": { "type": "object" },
+    "reason": { "type": "string" },
+    "proposed_resolution": { "type": "string" },
+    "count": { "type": "integer", "minimum": 0 },
+    "appended_task_ids": { "type": "array", "items": { "type": "string", "pattern": "^T[0-9]+$" } },
+    "pct": { "type": "number", "minimum": 0, "maximum": 100 },
+    "tokens": { "type": "integer", "minimum": 0 },
+    "usd": { "type": "number", "minimum": 0 },
+    "pattern": {
+      "type": "string",
+      "enum": ["identical_commit", "identical_test_output", "file_churn", "no_verified_progress"]
+    },
+    "details": { "type": "object" },
+    "pr_url": { "type": "string", "format": "uri" },
+    "branch": { "type": "string" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "phase_enter" } }, "required": ["kind"] },
+      "then": { "required": ["phase"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "phase_exit" } }, "required": ["kind"] },
+      "then": { "required": ["phase", "ok"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "action" } }, "required": ["kind"] },
+      "then": { "required": ["task_id", "tool"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "observation" } }, "required": ["kind"] },
+      "then": { "required": ["task_id", "tool", "exit_code"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "verification" } }, "required": ["kind"] },
+      "then": { "required": ["task_id", "tier", "verified", "evidence"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "blocker" } }, "required": ["kind"] },
+      "then": { "required": ["task_id", "reason"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "replan" } }, "required": ["kind"] },
+      "then": { "required": ["count", "reason"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "stuck" } }, "required": ["kind"] },
+      "then": { "required": ["pattern"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "run_complete" } }, "required": ["kind"] },
+      "then": { "required": ["pr_url", "branch"] }
+    }
+  ],
+  "additionalProperties": false
+}
