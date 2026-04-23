@@ -2,6 +2,24 @@
 
 All notable changes to this package are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.1.1] — 2026-04-23
+
+OSS research + hardening pass. Derived from a deep-research sweep of
+addyosmani/agent-skills, OpenHands, SWE-agent, Anthropic Agent SDK,
+MetaGPT/AutoGen/CrewAI/claude-flow, Aider, Cognition's "Don't build
+multi-agents" essay, MCP, and the Anthropic engineering blog.
+
+### Added
+
+- `CLAUDE.md` — project memory (SoT rule, smoke test command, "never do" list).
+- `docs/research-oss-best-practices.md` — 11-section research report.
+- `docs/AGENT_DESIGN.md` — rationale for multi-agent + Claude Code-native.
+- `docs/ANTI_PATTERNS.md` — 22 failure-mode entries with detection path.
+- `docs/EVAL.md` — evaluation harness spec (seed corpus + rubric + metrics).
+- `docs/TELEMETRY.md` — file-based observability with jq recipes.
+- `.claude/skills/swe-team-context-prime/SKILL.md` — 13th skill for start-of-turn re-grounding.
+- `SPEC.md` §15 Appendix A — 8 research-derived refinements.
+
 ## [0.1.0] — 2026-04-23
 
 Initial MVP.

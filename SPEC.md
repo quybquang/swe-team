@@ -685,3 +685,53 @@ swe-team/
 ---
 
 *End of SPEC. Implementation artifacts (agents, skills, hooks, install scripts, tests) derive from this document and must stay in sync. Any conflict is resolved by updating the code, not the spec, unless the spec itself is found to be wrong — in which case the spec is updated first and code follows.*
+
+---
+
+## 15. Appendix A — Research-derived refinements
+
+> Source: `docs/research-oss-best-practices.md`. Each amendment refines an existing canonical section without rewriting it. Promote into the canonical section when implemented; until then, treat as ratified intent.
+
+### A.1 Prompt-caching-aware spawn prompt layout (refines §3.6)
+
+**Source**: research §10 pattern 2 (Anthropic engineering blog), §7 pattern 2 (Aider).
+**Rationale**: Up to ~90% cost reduction on repeated prefixes. Each agent spawn re-includes the agent definition, the relevant skill bodies, and `run.json` — these are byte-identical across spawns of the same agent type within a run. Placing them at the top of the spawn prompt (before the per-task variable slice) maximizes cache hit rate. The new `swe-team-context-prime` skill emits its brief in this order. Document this prompt-layout discipline in §3.6 alongside the read-slice table.
+
+### A.2 Eval harness as CI gate (refines §13)
+
+**Source**: research §10 pattern 3 (Anthropic engineering blog).
+**Rationale**: Behavioral regressions in agent systems are invisible without an eval loop. `docs/EVAL.md` defines a 5-task seed corpus (E1–E5) with mechanical grading (PR opened, tests pass, scope respected, no hallucination, cost in budget). v0.1 ships the directory layout and 2 runnable tasks; v0.2 adds the remaining 3 tasks plus a `compare-to-baseline` regression gate. This moves "eval" off the §13 out-of-scope list as `tests/eval/` lands.
+
+### A.3 MCP scoped tools for verifiers (refines §4 tool allowlists)
+
+**Source**: research §9 pattern 2 (Model Context Protocol).
+**Rationale**: Verifiers currently receive `Bash` to run `git diff`, tests, lint. Bash is a wide blast radius — a prompt-injection through test stdout could induce arbitrary shell. Replacing `Bash` on `swe-verifier-mech` and `swe-verifier-sem` with scoped MCP servers (`git`, `filesystem`) shrinks blast radius without changing semantic capability. Optional MVP, recommended for v0.2. Coder retains full Bash (it must run arbitrary install commands).
+
+### A.4 ACI-style edit preference (refines §6 coder-loop skill)
+
+**Source**: research §4 pattern 1 (SWE-agent / Princeton).
+**Rationale**: SWE-agent's structured `edit <start_line> <end_line> <replacement>` reduces off-by-one bugs and unintended changes vs. raw file overwrite. Claude Code's `Edit` tool is the equivalent. The `swe-team:coder-loop` skill should explicitly instruct: prefer `Edit` for modifying existing files; reserve `Write` for new files only. This tightens scope diffs and makes `scope_diff_clean` (§9.2) a stricter signal in practice.
+
+### A.5 Structured event log replayability (refines §13 + §3.4)
+
+**Source**: research §3 pattern 1 (OpenHands EventStream).
+**Rationale**: §13 currently lists "run resumability after crash" as out of scope. The events on disk already form a replayable trace — the only missing piece is a `scripts/replay-run.sh` that reconstructs a run's state from `events.jsonl + build/task-*.jsonl + verification.jsonl` without re-spawning agents (read-only inspection). This unlocks post-mortem debugging without graduating to full crash-resume. Promote when implemented.
+
+### A.6 Tabular anti-rationalization format (refines §6 anti-rationalize skill)
+
+**Source**: research §1 pattern 2 (addyosmani/agent-skills).
+**Rationale**: addyosmani's skills use a two-column `Rationalization | Reality` table. Tabular format is more parse-stable for LLMs than prose. The `swe-team:anti-rationalize` skill should adopt the tabular form, listing concrete hedging tokens in column 1 and the required evidence in column 2. Already applied in `docs/ANTI_PATTERNS.md` and `swe-team-context-prime/SKILL.md`; backport to anti-rationalize.
+
+### A.7 Per-agent cost attribution in `budget.json` (refines §3.1, §10)
+
+**Source**: research §10 pattern 2 + Cognition critique §8 ("cost scales super-linearly").
+**Rationale**: §10 budget tracks totals only. Adding `by_agent` breakdown (lead / coder / verifier-mech / verifier-sem / pr) lets us see *which* agent drives cost in a stuck run, and validates the model-selection rationale in §4 with empirical data. Hook update is a one-line addition in `budget-gate.sh`. Schema extension recorded in `docs/TELEMETRY.md` §5.
+
+### A.8 Verb-first skill descriptions (refines §6)
+
+**Source**: research §2 pattern 3 (Anthropic Claude Code docs).
+**Rationale**: Claude Code's auto-invocation matches skills by description. Verb-first descriptions ("Assembles…", "Runs when…", "Detects…") match more reliably than noun-first. Audit existing skill descriptions in §6 for compliance; update where needed. New `swe-team-context-prime` skill already follows this convention.
+
+---
+
+*End of Appendix A. Refinements promote into their canonical sections as they ship; this appendix is the staging area, not parallel authority.*
