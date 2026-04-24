@@ -59,5 +59,9 @@
     "pr_labels": ["ai-generated", "swe-team"],
     "pr_draft": false,
     "require_clean_working_tree": true
+  },
+  "knowledge": {
+    "sources": [],
+    "write_target": ""
   }
 }

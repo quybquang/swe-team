@@ -130,6 +130,34 @@
         "require_clean_working_tree": { "type": "boolean" }
       },
       "additionalProperties": false
+    },
+    "knowledge": {
+      "type": "object",
+      "properties": {
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "type", "capabilities"],
+            "properties": {
+              "id":                { "type": "string", "minLength": 1 },
+              "type":              { "enum": ["local", "notion", "confluence", "linear"] },
+              "path":              { "type": "string" },
+              "project_namespace": { "type": "string" },
+              "space_id":          { "type": "string" },
+              "space_key":         { "type": "string" },
+              "capabilities": {
+                "type": "array",
+                "items": { "enum": ["read", "write"] },
+                "minItems": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "write_target": { "type": "string" }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

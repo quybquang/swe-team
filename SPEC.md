@@ -1,6 +1,6 @@
 # swe-team — Specification (SoT)
 
-> **Status**: v0.2.0
+> **Status**: v0.3.0
 > **Last updated**: 2026-04-24
 > **Authority**: This document is the Single Source of Truth. All code, configs, schemas, and agent prompts MUST derive from it. If code and spec disagree, the spec is right and the code is a bug.
 
@@ -89,6 +89,7 @@ Claude Code provides: isolated-context subagents (Task tool), file-based agent d
 ├── tasks.json                # authoritative task list (append-only updates)
 ├── phase_state.json          # current phase, active task, counters
 ├── events.jsonl              # system + lead events
+├── knowledge-context.md      # knowledge-search output: relevant pages from configured sources
 ├── pre-flight-brief.md       # clarify output: clarified req, key decisions, out-of-scope
 ├── assumptions.md            # autonomous-mode assumptions (omitted in interactive mode)
 ├── spec.md                   # DEFINE output: acceptance bullets, file hints, open questions
@@ -172,6 +173,9 @@ All events are line-delimited JSON. Every event has:
 | `observation` | `task_id`, `tool`, `exit_code`, `stdout_sha256`, `summary` (≤200 chars) | coder (via hook) |
 | `verification` | `task_id`, `tier`: `mech\|sem`, `verified`: bool, `evidence`: object (§ 9) | verifier-mech / verifier-sem |
 | `security_review` | `security_verdict`: `pass\|warn\|fail`, `security_issues`: array | verifier-sem (via security-review skill) |
+| `knowledge_search` | `results_found`: int, `sources_searched`: int | swe-lead (via knowledge-search skill) |
+| `knowledge_write` | `write_target`: string, `lessons_written`: int | swe-lead (via knowledge-write skill) |
+| `knowledge_write_skip` | `reason`: string | swe-lead (via knowledge-write skill) |
 | `blocker` | `task_id`, `reason`, `proposed_resolution` | coder |
 | `replan` | `count`, `reason`, `appended_task_ids`: string[] | swe-lead |
 | `budget_warn` | `pct`, `tokens`, `usd` | system (hook) |
@@ -199,7 +203,7 @@ Each agent, at the start of its turn, re-reads:
 
 | Agent | Reads |
 |---|---|
-| `swe-lead` | `run.json`, `tasks.json`, `phase_state.json`, last N=50 events from `events.jsonl`, all `blocker` + `verification` entries, last N=10 learnings from `learnings.jsonl` |
+| `swe-lead` | `run.json`, `tasks.json`, `phase_state.json`, last N=50 events from `events.jsonl`, all `blocker` + `verification` entries, last N=10 learnings from `learnings.jsonl`, `knowledge-context.md` (if exists) |
 | `swe-coder` (task T_i) | `run.json`, `tasks.json` entry for T_i only, `build/task-T_i.jsonl`, files in `touch_files` |
 | `swe-verifier-mech` | `tasks.json` entry for T_i, `git diff <base>..HEAD` for T_i commit, raw test/lint output |
 | `swe-verifier-sem` | `tasks.json` entry for T_i, `git diff` for T_i commit, mech verdict, `run.json.requirement` |
@@ -378,6 +382,8 @@ Skills live at `.claude/skills/<skill-name>/SKILL.md`. Each has the addyosmani f
 | `swe-team:open-pr` | `swe-team-open-pr` | SHIP | swe-pr | `gh pr create` with structured body derived from events + verification logs. |
 | `swe-team:retro` | `swe-team-retro` | RETRO | swe-lead | Post-run retrospective. Writes ≥1 lesson to `learnings.jsonl`. Runs on every terminal status. |
 | `swe-team:context-prime` | `swe-team-context-prime` | all | any agent | Start-of-turn re-grounding: re-reads run dir anchors, injects recent events, surfaces active learnings. |
+| `swe-team:knowledge-search` | `swe-team-knowledge-search` | pre-CLARIFY | swe-lead | Fan-out keyword search across configured knowledge sources (local vault, Notion, Confluence, Linear). Produces `knowledge-context.md` in run dir. No-op if `knowledge.sources` is empty. |
+| `swe-team:knowledge-write` | `swe-team-knowledge-write` | post-RETRO | swe-lead | Writes RETRO lessons to `knowledge.write_target` (local vault, Notion, or Confluence) using adapter dispatch. No-op if `write_target` is empty. |
 
 ---
 
@@ -558,7 +564,7 @@ File: `swe-team.config.json` at repo root. Schema: `.claude/references/config-sc
 ```jsonc
 {
   "$schema": "./.claude/references/config-schema.json",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "models": {
     "lead": "opus",
     "coder": "sonnet",
@@ -617,6 +623,26 @@ File: `swe-team.config.json` at repo root. Schema: `.claude/references/config-sc
     "pr_labels": ["ai-generated", "swe-team"],
     "pr_draft": false,
     "require_clean_working_tree": true
+  },
+  "knowledge": {
+    // Optional. Omit entirely for projects not using a knowledge vault.
+    "sources": [
+      // Local Obsidian/markdown vault
+      // { "id": "local-vault", "type": "local", "path": "~/vault",
+      //   "project_namespace": "<project-name>", "capabilities": ["read", "write"] },
+      //
+      // Notion workspace (requires Notion MCP connected)
+      // { "id": "team-notion", "type": "notion", "space_id": "3361cd99...",
+      //   "capabilities": ["read"] },
+      //
+      // Confluence space (requires Atlassian MCP connected)
+      // { "id": "confluence", "type": "confluence", "space_key": "ENG",
+      //   "capabilities": ["read"] },
+      //
+      // Linear (requires Linear MCP connected — read-only)
+      // { "id": "linear", "type": "linear", "capabilities": ["read"] }
+    ],
+    "write_target": ""   // must match an id in sources[] that has "write" capability
   }
 }
 ```
@@ -632,9 +658,31 @@ File: `swe-team.config.json` at repo root. Schema: `.claude/references/config-sc
 
 `auto` means "re-detect each run." Explicit string = pinned.
 
----
+### 10.2 Knowledge Sources
 
-## 11. Package & Install
+`knowledge.sources` is an optional array of knowledge providers. Each source has:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | string | yes | Unique identifier — referenced by `write_target` |
+| `type` | enum | yes | `local` \| `notion` \| `confluence` \| `linear` |
+| `capabilities` | string[] | yes | Subset of `["read", "write"]`. `linear` supports `read` only. |
+| `path` | string | `local` only | Absolute path to vault root (e.g. `~/vault`) |
+| `project_namespace` | string | `local` only | Sub-folder name under `wiki/projects/` |
+| `space_id` | string | `notion` only | Notion workspace or database page ID |
+| `space_key` | string | `confluence` only | Confluence space key |
+
+`write_target` must match the `id` of a source with `"write"` in `capabilities`.
+If empty string or absent, `swe-team:knowledge-write` is a no-op.
+
+**MCP requirements**:
+- `notion` type → Notion MCP must be connected in the Claude Code session.
+- `confluence` type → Atlassian MCP must be connected.
+- `linear` type → Linear MCP must be connected.
+- `local` type → no MCP needed; uses Bash + grep.
+
+If the required MCP is unavailable at search/write time, the skill logs a warning event and
+skips that source — it does NOT abort the run.
 
 ### 11.1 Repo structure
 

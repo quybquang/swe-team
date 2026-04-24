@@ -2,6 +2,48 @@
 
 All notable changes to this package are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.0] — 2026-04-24
+
+Bidirectional knowledge integration. Agents can now read from and write to external knowledge
+sources (local vault, Notion, Confluence, Linear) to ground decisions in domain context and
+compound learnings across runs and projects.
+
+### Added
+
+- `.claude/skills/swe-team-knowledge-search/SKILL.md` — pre-CLARIFY skill. Fans out a
+  keyword search across all configured `knowledge.sources` (local vault grep, Notion MCP,
+  Atlassian MCP, Linear MCP). Produces `knowledge-context.md` in the run directory.
+  The CLARIFY and DEFINE phases read this file to anchor assumptions in real domain knowledge
+  rather than codebase grep alone. No-op if `knowledge.sources` is empty.
+
+- `.claude/skills/swe-team-knowledge-write/SKILL.md` — post-RETRO skill. Reads lessons
+  written by `swe-team:retro` and persists them to the `knowledge.write_target` source.
+  Adapter dispatch: `local` writes a dated markdown page following vault frontmatter conventions
+  and updates `wiki/index.md` + `_meta/processing-log.md`; `notion` uses `notion-create-pages`
+  MCP; `confluence` uses Atlassian MCP. No-op if `write_target` is empty. Idempotent: checks
+  run_id in processing log before writing.
+
+### Changed
+
+- `SPEC.md` bumped to v0.3.0. Updates in:
+  - §3.1 run dir layout: added `knowledge-context.md`.
+  - §3.4 event kinds: added `knowledge_search`, `knowledge_write`, `knowledge_write_skip` events.
+  - §3.6 context condensation: swe-lead row now includes `knowledge-context.md`.
+  - §6 skills catalog: 2 new skills (`knowledge-search`, `knowledge-write`).
+  - §10 config: added `knowledge` top-level key with `sources[]` array and `write_target` string.
+  - §10.2 (new): Knowledge Sources subsection — field reference, MCP requirements, graceful
+    degradation rule (missing MCP = skip source, never abort run).
+
+- `swe-lead.md` agent: step 1b added (invoke `swe-team:knowledge-search` before CLARIFY);
+  step 9a added (invoke `swe-team:knowledge-write` after RETRO). Invariants, Skills, and
+  Output contract updated.
+
+- `.claude/references/config-schema.json`: added optional `knowledge` object with `sources`
+  array (items: `{id, type, capabilities, path?, project_namespace?, space_id?, space_key?}`)
+  and `write_target` string.
+
+- `.claude/swe-team/config.default.json`: version 0.3.0; added `knowledge: {sources: [], write_target: ""}`.
+
 ## [0.2.0] — 2026-04-24
 
 Three new capabilities ported from gstack research: pre-flight clarification, persistent
