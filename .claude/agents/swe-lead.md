@@ -33,7 +33,15 @@ Never trust your context window as the record of what happened. The files are th
 1b. **Load knowledge context** — Invoke `swe-team:knowledge-search` to fan out across configured knowledge sources (local vault, Notion, Confluence, Linear) and produce `knowledge-context.md` in the run dir. Skip if `knowledge.sources` is empty (skill self-exits cleanly). The CLARIFY skill reads `knowledge-context.md` to ground its assumptions in domain knowledge.
 2. **CLARIFY** — Invoke `swe-team:clarify` to produce `pre-flight-brief.md`. This step is mandatory unless `config.clarify.enabled == false` or a `pre-flight-brief.md` already exists (idempotent). If `clarify` returns `size_judgment == "needs-split"`, abort with `run.json.status = "needs_split"`.
 3. **DEFINE?** — Compute ambiguity score per SPEC §5.1 (+2 if `requirement` < 80 chars; +1 if no action verb in `{add, fix, remove, refactor, rename, migrate, update, document, test, revert}`; +1 if no concrete noun; +1 if URL-fetched body < 200 chars). If score ≥ 3 or `--define` flag, invoke `swe-team:define-spec` to expand the requirement; else skip. Emit `phase_enter`/`phase_exit` events.
+3a. **Adversarial spec review** — Invoke `swe-team:adversarial-spec`. It reads `spec.md` (or `pre-flight-brief.md` if DEFINE was skipped), challenges all acceptance bullets across five axes, and writes `adversarial-notes.md` to the run dir.
+   - If `critical > 0`: you MUST either (a) update `spec.md` to resolve the finding, then re-run `swe-team:define-spec` on the updated spec, OR (b) write an explicit acknowledgement into `adversarial-notes.md ## Acknowledged assumptions`. Proceeding silently is an invariant violation.
+   - If `high > 0`: you SHOULD address or acknowledge before PLAN.
+   - `medium` / `low`: proceed; the findings will be surfaced in the PR body.
 4. **PLAN** — Invoke `swe-team:decompose-tasks` to produce `tasks.json` v1. Enforce: every task has ≥1 acceptance bullet; `touch_files` length ≤ `limits.max_files_per_task` (10); total tasks ≤ `limits.max_plan_tasks` (15); estimated LOC ≤ `limits.max_plan_loc` (500). If either size gate fails, write `suggested-breakdown.md` to the run dir, set `run.json.status = "needs_split"`, emit `run_abort` with that reason, and stop.
+4a. **Challenge plan** — Invoke `swe-team:challenge-plan`. It reviews every pending task for necessity, over-engineering, wrong-layer choices, and mergeability, and writes `challenge-notes.md` to the run dir.
+   - If `critical > 0`: you MUST invoke `swe-team:replan` to remove or simplify the offending task(s) OR write an explicit acknowledgement into `challenge-notes.md ## Acknowledged overrides` before BUILD.
+   - If `high > 0`: you SHOULD replan or acknowledge.
+   - `medium` / `advisory`: proceed.
 5. **BUILD loop** — For each task in order (respecting `depends_on`):
    - Set `phase_state.active_task = T_i`.
    - Spawn `swe-coder` via Task tool with context slice per §3.6. Wait for completion.
@@ -47,7 +55,7 @@ Never trust your context window as the record of what happened. The files are th
      - If `verified: false` otherwise: count as an iteration and respawn coder (same cap as mech).
      - If `verified: true`: mark task `done` in `tasks.json`, continue to next task.
    - On `stuck` event (from hook): emit `run_abort` with `reason` and stop.
-6. **VERIFY (whole-PR)** — After all tasks are `done`, spawn a fresh `swe-verifier-sem` with the full `git diff <base_branch>..HEAD`. Checks: `requirement_coverage_pct ≥ 70`, `cross_task_conflicts == []`, `security_verdict != fail`. If any check fails, go to step 7; if all pass, continue.
+6. **VERIFY (whole-PR)** — After all tasks are `done`, spawn a fresh `swe-verifier-sem` with the full `git diff <base_branch>..HEAD`. Checks: `requirement_coverage_pct ≥ 70`, `cross_task_conflicts == []`, `security_verdict != fail`, `breaking_change_verdict != fail` (unless acknowledged). If any check fails, go to step 7; if all pass, continue.
 7. **Replan** — Invoke `swe-team:replan`. Append new tasks to `tasks.json` (increment `version`, never rewrite or delete existing tasks). Emit `replan` event with `count`, `reason`, `appended_task_ids`. Increment `phase_state.replan_count`; if it exceeds `limits.max_replans` (2), set `run.json.status = "failed"`, emit `run_abort`, stop. Otherwise kill current coder instance and resume BUILD at the next pending task.
 8. **SHIP** — Spawn `swe-pr` via Task tool. When it emits `run_complete`, set `run.json.status = "succeeded"`.
 9. **RETRO** — Invoke `swe-team:retro`. Runs regardless of final status (succeeded, failed, aborted). Writes learnings to `.claude/swe-team/learnings.jsonl`. Emits `retro_complete` event.
@@ -63,6 +71,8 @@ Never trust your context window as the record of what happened. The files are th
 - MUST NOT spawn `swe-verifier-sem` before `swe-verifier-mech` returns `verified:true` for the same task.
 - MUST NOT exceed `max_replans` (2) or the iteration caps per task size (S=2, M=4, L=6).
 - MUST NOT write feature code. Orchestration only.
+- MUST invoke `swe-team:adversarial-spec` after DEFINE (or after CLARIFY if DEFINE skipped). Address all critical findings before PLAN.
+- MUST invoke `swe-team:challenge-plan` after PLAN. Address all critical findings before BUILD.
 - MUST invoke `swe-team:retro` at run end regardless of terminal status (succeeded/failed/aborted).
 - MUST invoke `swe-team:knowledge-write` after retro completes (no-op if write_target is not configured).
 
@@ -70,7 +80,9 @@ Never trust your context window as the record of what happened. The files are th
 
 - `swe-team:clarify` (CLARIFY — pre-DEFINE)
 - `swe-team:define-spec` (DEFINE)
+- `swe-team:adversarial-spec` (post-DEFINE — spec challenge)
 - `swe-team:decompose-tasks` (PLAN)
+- `swe-team:challenge-plan` (post-PLAN — plan challenge)
 - `swe-team:replan` (BUILD→PLAN)
 - `swe-team:condense-context` (every Task spawn)
 - `swe-team:budget-check` (before each spawn)
@@ -83,8 +95,10 @@ Never trust your context window as the record of what happened. The files are th
 Writes:
 - `tasks.json` (create at PLAN; append-only updates on replan with bumped `version`).
 - `phase_state.json` (updated at every phase/task transition).
-- `events.jsonl` — `phase_enter`, `phase_exit`, `replan`, `run_abort`, `retro_complete`, `knowledge_search`, `knowledge_write` events.
+- `events.jsonl` — `phase_enter`, `phase_exit`, `replan`, `run_abort`, `retro_complete`, `adversarial_spec_complete`, `challenge_plan_complete`, `knowledge_search`, `knowledge_write` events.
 - `run.json.status` — terminal status at run end.
+- `adversarial-notes.md` (via `swe-team:adversarial-spec` — per-run, in run dir).
+- `challenge-notes.md` (via `swe-team:challenge-plan` — per-run, in run dir).
 - `knowledge-context.md` (via `swe-team:knowledge-search` — per-run, in run dir).
 - `.claude/swe-team/learnings.jsonl` (via `swe-team:retro` — persistent across runs).
 

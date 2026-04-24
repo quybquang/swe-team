@@ -1,6 +1,6 @@
 # swe-team — Specification (SoT)
 
-> **Status**: v0.3.0
+> **Status**: v0.4.0
 > **Last updated**: 2026-04-24
 > **Authority**: This document is the Single Source of Truth. All code, configs, schemas, and agent prompts MUST derive from it. If code and spec disagree, the spec is right and the code is a bug.
 
@@ -92,6 +92,8 @@ Claude Code provides: isolated-context subagents (Task tool), file-based agent d
 ├── knowledge-context.md      # knowledge-search output: relevant pages from configured sources
 ├── pre-flight-brief.md       # clarify output: clarified req, key decisions, out-of-scope
 ├── assumptions.md            # autonomous-mode assumptions (omitted in interactive mode)
+├── adversarial-notes.md      # adversarial-spec output: challenges to spec/plan before BUILD
+├── challenge-notes.md        # challenge-plan output: task-level risks and gaps before BUILD
 ├── spec.md                   # DEFINE output: acceptance bullets, file hints, open questions
 ├── build/
 │   └── task-<task_id>.jsonl  # one file per task (coder actions/observations)
@@ -176,6 +178,10 @@ All events are line-delimited JSON. Every event has:
 | `knowledge_search` | `results_found`: int, `sources_searched`: int | swe-lead (via knowledge-search skill) |
 | `knowledge_write` | `write_target`: string, `lessons_written`: int | swe-lead (via knowledge-write skill) |
 | `knowledge_write_skip` | `reason`: string | swe-lead (via knowledge-write skill) |
+| `adversarial_spec_complete` | `challenges_raised`: int, `blockers`: string[], `critical`: bool | swe-lead (via adversarial-spec skill) |
+| `challenge_plan_complete` | `tasks_reviewed`: int, `high_risk_tasks`: string[], `critical`: bool | swe-lead (via challenge-plan skill) |
+| `dep_audit_complete` | `packages_checked`: int, `vulnerabilities`: array, `verdict`: `pass\|warn\|fail` | swe-verifier-mech (via dep-audit skill) |
+| `breaking_change` | `kind`: `api\|type\|export`, `file`: string, `symbol`: string, `policy`: `block\|acknowledge` | swe-verifier-sem (via breaking-change skill) |
 | `blocker` | `task_id`, `reason`, `proposed_resolution` | coder |
 | `replan` | `count`, `reason`, `appended_task_ids`: string[] | swe-lead |
 | `budget_warn` | `pct`, `tokens`, `usd` | system (hook) |
@@ -267,14 +273,30 @@ All agents live in `.claude/agents/`. Frontmatter fields: `name`, `description`,
    └─────┬─────┘
          ▼
  ┌───────────────┐
+ │   ADV-SPEC    │  swe-lead (always, after DEFINE)
+ └───────────────┘
+   │
+   │ swe-team:adversarial-spec — challenge spec for gaps, ambiguity, risky assumptions
+   │ output: adversarial-notes.md
+   │ if critical=true → abort with status=needs_respec
+   ▼
+ ┌───────────────┐
  │     PLAN      │  swe-lead
  └───────────────┘
    │
-   │ output: tasks.json v1 (informed by pre-flight-brief.md + learnings.jsonl)
+   │ output: tasks.json v1 (informed by pre-flight-brief.md + learnings.jsonl + adversarial-notes.md)
    │ gate: no task >10 files; every task has ≥1 acceptance
    │
    │ SIZE GATE: if total est. LOC > 500 OR task count > 15
    │   → write suggested-breakdown.md; abort with status=needs_split
+   ▼
+ ┌───────────────┐
+ │  CHAL-PLAN    │  swe-lead (after PLAN, before BUILD)
+ └───────────────┘
+   │
+   │ swe-team:challenge-plan — adversarial review of tasks.json for gaps, dependencies, scope creep
+   │ output: challenge-notes.md
+   │ if critical=true → triggers replan before BUILD begins
    ▼
  ┌───────────────┐
  │     BUILD     │  loop over tasks sequentially
@@ -283,9 +305,15 @@ All agents live in `.claude/agents/`. Frontmatter fields: `name`, `description`,
    │ for each task:
    │   swe-coder(task) → 1 commit on branch
    │   swe-verifier-mech(commit)
+   │     → swe-team:dep-audit — if dependency files changed, CVE scan; verdict pass|warn|fail
+   │       fail → re-plan (coder must remove/update vulnerable dep)
    │     fail → revision back to swe-coder (counts vs iter budget)
    │     pass → swe-verifier-sem(commit)
-   │       fail (spec_gap | security_fail) → re-plan
+   │       → swe-team:breaking-change — detect exported symbol removal/rename
+   │         policy=block → verified:false, reason:breaking_change
+   │         policy=acknowledge → emit breaking_change event, annotate PR
+   │       → swe-team:verify-semantic (two-stage: task-acceptance then global-coherence)
+   │       fail (spec_gap | security_fail | breaking_change[block]) → re-plan
    │       fail (other) → revision
    │       pass → mark task done
    │   if blocker event → swe-lead.replan() (max 2)
@@ -296,10 +324,13 @@ All agents live in `.claude/agents/`. Frontmatter fields: `name`, `description`,
  └───────────────┘
    │
    │ input: full diff <base>..HEAD
-   │ checks: requirement coverage %, cross-task conflicts, security verdict
+   │ checks: requirement coverage %, cross-task conflicts, security verdict, DoD gate
    │   swe-team:security-review → OWASP + secret scan → pass|warn|fail
    │   warn: recorded in PR body, does NOT block
    │   fail: triggers re-plan targeting vulnerable code
+   │   DoD gate (swe-verifier-sem):
+   │     docs_gate (if enabled): public API changed without doc update → warn or block
+   │     dep_audit: cross-PR dependency vulnerability summary
    ▼
  ┌───────────────┐
  │     SHIP      │  swe-pr
@@ -384,6 +415,10 @@ Skills live at `.claude/skills/<skill-name>/SKILL.md`. Each has the addyosmani f
 | `swe-team:context-prime` | `swe-team-context-prime` | all | any agent | Start-of-turn re-grounding: re-reads run dir anchors, injects recent events, surfaces active learnings. |
 | `swe-team:knowledge-search` | `swe-team-knowledge-search` | pre-CLARIFY | swe-lead | Fan-out keyword search across configured knowledge sources (local vault, Notion, Confluence, Linear). Produces `knowledge-context.md` in run dir. No-op if `knowledge.sources` is empty. |
 | `swe-team:knowledge-write` | `swe-team-knowledge-write` | post-RETRO | swe-lead | Writes RETRO lessons to `knowledge.write_target` (local vault, Notion, or Confluence) using adapter dispatch. No-op if `write_target` is empty. |
+| `swe-team:adversarial-spec` | `swe-team-adversarial-spec` | post-DEFINE pre-PLAN | swe-lead | Adversarially challenges the spec/requirement for gaps, under-specified assumptions, and hidden complexity. Outputs `adversarial-notes.md`. critical=true aborts before PLAN. |
+| `swe-team:challenge-plan` | `swe-team-challenge-plan` | post-PLAN pre-BUILD | swe-lead | Adversarially reviews tasks.json for missing dependencies, scope creep, unrealistic acceptance. Outputs `challenge-notes.md`. critical=true triggers immediate replan. |
+| `swe-team:dep-audit` | `swe-team-dep-audit` | VERIFY (per-commit) | swe-verifier-mech | Runs CVE + license scan when dependency manifests change. Emits `dep_audit_complete` event. Blocks on severity per `dod.dep_audit_fail_on`. |
+| `swe-team:breaking-change` | `swe-team-breaking-change` | VERIFY (per-commit) | swe-verifier-sem | Detects removal or renaming of exported symbols (functions, types, classes). Applies `dod.breaking_change_flag` policy: `block` → verified:false; `acknowledge` → annotates PR. |
 | `swe-team:onboard` | `swe-team-onboard` | setup | `/swe-team-setup` command | Interactive setup wizard. Asks questions in user's chosen language, writes `swe-team.config.json`. No JSON editing required. |
 
 ---
@@ -507,6 +542,7 @@ Verdict rule: `verified = true` iff:
 - `acceptance_missing == []`
 - `scope_diff_clean == true`
 - `reasoning_cites_evidence == true`
+- No `breaking_change` event with `policy == "block"` for this commit
 
 ### 9.3 Whole-PR VERIFY pass (swe-verifier-sem, separate spawn)
 
@@ -556,6 +592,55 @@ The `swe-team:anti-rationalize` skill is invoked inside both verifier prompts. I
 
 A rejected verdict forces the verifier to re-run with stricter grounding.
 
+### 9.6 Dependency Audit evidence (swe-team:dep-audit)
+
+When dependency manifests change (`package.json`, `go.mod`, `pyproject.toml`, `requirements.txt`), a `dep_audit_complete` event is appended to `verification.jsonl`:
+
+```jsonc
+{
+  "kind": "dep_audit_complete",
+  "packages_checked": 42,
+  "vulnerabilities": [
+    {
+      "package": "lodash",
+      "version": "4.17.15",
+      "severity": "high",
+      "cve": "CVE-2021-23337",
+      "fix_available": "4.17.21"
+    }
+  ],
+  "verdict": "fail"   // pass | warn | fail
+}
+```
+
+Verdict rule per `dod.dep_audit_fail_on`:
+- Any vulnerability whose `severity` ∈ `dep_audit_fail_on` → `verdict: fail` → mech `verified:false` with `reason:"dep_audit_fail"`.
+- If no match but vulnerabilities exist → `verdict: warn` → recorded in PR body.
+- Empty vulnerabilities → `verdict: pass`.
+
+### 9.7 Breaking Change detection (swe-team:breaking-change)
+
+A `breaking_change` event is appended for each detected breaking symbol:
+
+```jsonc
+{
+  "kind": "breaking_change",
+  "policy": "block",     // from dod.breaking_change_flag
+  "changes": [
+    {
+      "kind": "api",           // api | type | export
+      "file": "src/lib/auth.ts",
+      "symbol": "verifyToken",
+      "change": "removed"      // removed | renamed | signature_changed
+    }
+  ]
+}
+```
+
+Policy behaviour:
+- `block` → sem `verified:false` with `reason:"breaking_change"` → coder must revert or provide migration shim.
+- `acknowledge` → PR body annotated with breaking changes; SHIP not blocked.
+
 ---
 
 ## 10. Config Schema
@@ -565,7 +650,7 @@ File: `swe-team.config.json` at repo root. Schema: `.claude/references/config-sc
 ```jsonc
 {
   "$schema": "./.claude/references/config-schema.json",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "models": {
     "lead": "opus",
     "coder": "sonnet",
@@ -644,6 +729,14 @@ File: `swe-team.config.json` at repo root. Schema: `.claude/references/config-sc
       // { "id": "linear", "type": "linear", "capabilities": ["read"] }
     ],
     "write_target": ""   // must match an id in sources[] that has "write" capability
+  },
+  "dod": {
+    // Definition of Done — code quality gates applied during VERIFY
+    "breaking_change_flag": "block",         // "block" | "acknowledge"
+    "dep_audit_fail_on": ["critical", "high"], // severities that block PR; [] to disable
+    "audit_dev_deps": false,                  // also audit devDependencies/dev packages
+    "docs_gate": true,                        // check docs updated when public API changes
+    "docs_gate_fail_on_miss": false           // true = block PR; false = warn in PR body only
   }
 }
 ```
@@ -708,7 +801,7 @@ swe-team/
 │   │   ├── swe-verifier-sem.md
 │   │   └── swe-pr.md
 │   ├── skills/
-│   │   └── <12 skill directories>/SKILL.md
+│   │   └── <22 skill directories>/SKILL.md
 │   ├── references/
 │   │   ├── event-schema.json
 │   │   ├── tasks-schema.json

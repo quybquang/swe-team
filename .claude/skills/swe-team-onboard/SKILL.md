@@ -323,7 +323,59 @@ Map:
 
 ---
 
-### Section 6 — Clarification mode
+### Section 6 — Code quality policy (DoD)
+
+```
+─────────────────────────────────
+  Code quality policy
+─────────────────────────────────
+  When agents submit code, they run automated
+  quality checks. Choose how strict each gate is.
+
+  ① Breaking changes — what happens if a commit
+    removes an exported function, renames a type,
+    or changes a public API signature?
+
+  1. Block the PR — require an explicit fix  ← recommended
+  2. Acknowledge — allow with a BREAKING CHANGE note in the PR
+─────────────────────────────────
+```
+
+After choice ①:
+
+```
+  ② New dependencies — when a package.json / go.mod
+    changes, run a CVE + license audit.
+    Block the PR on:
+
+  1. Critical + High vulnerabilities  ← recommended
+  2. Critical only
+  3. All severities (critical / high / medium)
+  4. Skip dependency auditing
+─────────────────────────────────
+```
+
+After choice ②:
+
+```
+  ③ Documentation gate — when a public API changes,
+    check whether docs were also updated (README,
+    JSDoc, OpenAPI schema). Missing docs:
+
+  1. Warn in PR body only  ← recommended
+  2. Block the PR until docs are added
+  3. Off — don't check docs
+─────────────────────────────────
+```
+
+Map choices:
+- ①1 → `breaking_change_flag: "block"` · ①2 → `"acknowledge"`
+- ②1 → `dep_audit_fail_on: ["critical","high"]` · ②2 → `["critical"]` · ②3 → `["critical","high","medium"]` · ②4 → `dep_audit_fail_on: []`
+- ③1 → `docs_gate: true, docs_gate_fail_on_miss: false` · ③2 → `docs_gate: true, docs_gate_fail_on_miss: true` · ③3 → `docs_gate: false`
+
+---
+
+### Section 7 — Clarification mode
 
 ```
 ─────────────────────────────────

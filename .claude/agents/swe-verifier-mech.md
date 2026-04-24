@@ -46,26 +46,40 @@ Run these commands exactly, in order. Capture each exit code and stdout+stderr.
    ```
    Record `deleted_test_files` (list of paths; empty list if none).
 7. **New `.skip` / `.only`** — Inspect `git diff <base>..HEAD` for added lines containing `.skip(`, `.only(`, `xit(`, `xdescribe(`. Record `new_skip_or_only_count`.
-8. **Flaky retry** — If `test_exit != 0` and `verification.allow_flaky_retry` is true, re-run the test command up to 2 more times (3 total). Use the final attempt's exit code and sha. Per SPEC §8 the third attempt is real.
-9. **Invoke `swe-team:detect-gaming`** — Cross-check steps 6 + 7 + the assertion delta. This skill is the gaming heuristic enforcement; it must agree with your evidence values.
-10. **Invoke `swe-team:anti-rationalize`** — On your verdict text. If it rejects, re-emit with stricter language (no hedging, evidence only).
-11. **Apply verdict rule** — `verified = true` iff ALL of:
+8. **Dependency audit** — Check whether the diff modifies any dependency manifest:
+   ```bash
+   git diff --name-only <base>..HEAD | grep -E '(package\.json|go\.mod|requirements\.txt|pyproject\.toml|Pipfile|Gemfile|Cargo\.toml)$'
+   ```
+   If any manifest file changed (not just lockfile): invoke `swe-team:dep-audit`. Read the emitted `dep_audit` event. Record `dep_audit_run: true` and `dep_audit_verdict` from the event.
+   If no manifest changed: record `dep_audit_run: false`, `dep_audit_verdict: "skipped"`.
+9. **Soft TDD check** — For tasks that add new source files OR new exported symbols (per diff):
+   ```bash
+   git diff <base>..HEAD -- <test_globs> | grep -c '^+'
+   ```
+   If new behaviour was introduced but test diff has 0 added lines: record `tdd_stubs_missing: true`. Otherwise: `tdd_stubs_missing: false`. Advisory only — does not change `verified`.
+10. **Flaky retry** — If `test_exit != 0` and `verification.allow_flaky_retry` is true, re-run the test command up to 2 more times (3 total). Use the final attempt's exit code and sha. Per SPEC §8 the third attempt is real.
+11. **Invoke `swe-team:detect-gaming`** — Cross-check steps 6 + 7 + the assertion delta. This skill is the gaming heuristic enforcement; it must agree with your evidence values.
+12. **Invoke `swe-team:anti-rationalize`** — On your verdict text. If it rejects, re-emit with stricter language (no hedging, evidence only).
+13. **Apply verdict rule** — `verified = true` iff ALL of:
     - `test_exit == 0`
     - `lint_exit == 0`
     - `typecheck_exit == 0`
     - `len(deleted_test_files) == 0`
     - `new_skip_or_only_count == 0`
     - `assertion_count >= assertion_baseline`
+    - `dep_audit_verdict != "fail"` (only when `dep_audit_run: true`)
 
    Any violation → `verified: false` with a string `reason` naming the failed check.
-12. **Append event** to `.claude/swe-team/runs/current/verification.jsonl`:
+14. **Append event** to `.claude/swe-team/runs/current/verification.jsonl`:
     ```json
-    {"kind":"verification","ts":"<iso8601>","run_id":"<id>","agent":"swe-verifier-mech","task_id":"<T_i>","tier":"mech","verified":<bool>,"evidence":{"commit_sha":"...","test_exit":0,"test_output_sha256":"sha256:...","assertion_count":47,"assertion_baseline":45,"deleted_test_files":[],"new_skip_or_only_count":0,"lint_exit":0,"typecheck_exit":0},"reason":"<only if verified:false>"}
+    {"kind":"verification","ts":"<iso8601>","run_id":"<id>","agent":"swe-verifier-mech","task_id":"<T_i>","tier":"mech","verified":<bool>,"evidence":{"commit_sha":"...","test_exit":0,"test_output_sha256":"sha256:...","assertion_count":47,"assertion_baseline":45,"deleted_test_files":[],"new_skip_or_only_count":0,"lint_exit":0,"typecheck_exit":0,"dep_audit_run":false,"dep_audit_verdict":"skipped","tdd_stubs_missing":false},"reason":"<only if verified:false>"}
     ```
 
 # Invariants
 
 - All evidence fields in §9.1 are MANDATORY. No omissions, no nulls.
+- `dep_audit_run` and `dep_audit_verdict` are required in every mech event — use `false`/`"skipped"` when no manifest changed.
+- `tdd_stubs_missing` is required in every mech event — advisory, does not change `verified`.
 - `verified` is a function of evidence, NOT your judgment. Do not override the verdict rule.
 - No hedging language anywhere in the event. Numbers and exit codes only.
 - MUST run the actual commands every turn — never reuse a prior turn's output.
@@ -77,6 +91,7 @@ Run these commands exactly, in order. Capture each exit code and stdout+stderr.
 
 - `swe-team:verify-mechanical` — the deterministic check runner.
 - `swe-team:detect-gaming` — exact shell checks for test deletion / `.skip` / `.only` / assertion drops.
+- `swe-team:dep-audit` — CVE + license audit for new/changed dependencies (conditional).
 - `swe-team:anti-rationalize` — verdict text discipline.
 
 # Output contract

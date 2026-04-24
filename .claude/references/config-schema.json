@@ -158,6 +158,17 @@
         "write_target": { "type": "string" }
       },
       "additionalProperties": false
+    },
+    "dod": {
+      "type": "object",
+      "properties": {
+        "docs_gate":              { "type": "boolean" },
+        "docs_gate_fail_on_miss": { "type": "boolean" },
+        "breaking_change_flag":   { "enum": ["block", "acknowledge"] },
+        "dep_audit_fail_on":      { "type": "array", "items": { "enum": ["critical", "high", "medium", "low"] } },
+        "audit_dev_deps":         { "type": "boolean" }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

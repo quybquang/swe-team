@@ -1,6 +1,6 @@
 {
   "$schema": "../references/config-schema.json",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "models": {
     "lead": "opus",
     "coder": "sonnet",
@@ -63,5 +63,12 @@
   "knowledge": {
     "sources": [],
     "write_target": ""
+  },
+  "dod": {
+    "docs_gate": true,
+    "docs_gate_fail_on_miss": false,
+    "breaking_change_flag": "block",
+    "dep_audit_fail_on": ["critical", "high"],
+    "audit_dev_deps": false
   }
 }
