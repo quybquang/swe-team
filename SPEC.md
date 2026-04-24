@@ -384,6 +384,7 @@ Skills live at `.claude/skills/<skill-name>/SKILL.md`. Each has the addyosmani f
 | `swe-team:context-prime` | `swe-team-context-prime` | all | any agent | Start-of-turn re-grounding: re-reads run dir anchors, injects recent events, surfaces active learnings. |
 | `swe-team:knowledge-search` | `swe-team-knowledge-search` | pre-CLARIFY | swe-lead | Fan-out keyword search across configured knowledge sources (local vault, Notion, Confluence, Linear). Produces `knowledge-context.md` in run dir. No-op if `knowledge.sources` is empty. |
 | `swe-team:knowledge-write` | `swe-team-knowledge-write` | post-RETRO | swe-lead | Writes RETRO lessons to `knowledge.write_target` (local vault, Notion, or Confluence) using adapter dispatch. No-op if `write_target` is empty. |
+| `swe-team:onboard` | `swe-team-onboard` | setup | `/swe-team-setup` command | Interactive setup wizard. Asks questions in user's chosen language, writes `swe-team.config.json`. No JSON editing required. |
 
 ---
 

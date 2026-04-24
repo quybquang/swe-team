@@ -2,6 +2,25 @@
 
 All notable changes to this package are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.1] — 2026-04-24
+
+Interactive setup wizard — teammates can configure swe-team via conversation, not JSON.
+
+### Added
+
+- `.claude/skills/swe-team-onboard/SKILL.md` — conversational setup wizard. Asks one
+  section at a time in the user's chosen language, auto-detects stack, and writes
+  `swe-team.config.json` on their behalf. Covers: language, stack confirmation, base branch,
+  knowledge sources (local vault / Notion / Confluence / Linear), budget, security policy,
+  and clarify mode. Never shows raw JSON to the user during setup.
+- `.claude/commands/swe-team-setup.md` — `/swe-team-setup` slash command. Checks for
+  existing install, confirms overwrite if config exists, then invokes `swe-team:onboard`.
+  Users can abort at any section by typing `quit` / `thoát` / `exit`.
+
+### Changed
+
+- `SPEC.md` §6: `swe-team:onboard` added to skills catalog.
+
 ## [0.3.0] — 2026-04-24
 
 Bidirectional knowledge integration. Agents can now read from and write to external knowledge
