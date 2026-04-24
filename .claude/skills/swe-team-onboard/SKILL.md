@@ -1,249 +1,461 @@
 ---
 name: swe-team:onboard
 description: >
-  Interactive setup wizard for swe-team. Walks the user through all configuration
-  questions in their chosen language, then writes swe-team.config.json for them.
-  No JSON editing required. Invoke via /swe-team-setup command.
+  Interactive setup wizard for swe-team. Auto-detects project settings, presents
+  numbered option menus in the user's chosen language, and writes swe-team.config.json
+  after a final confirmation brief. No JSON editing, no free-text guessing.
 ---
 
 # Onboard
 
 ## Overview
 
-`swe-team:onboard` is a conversational setup wizard. It asks the user one question at a
-time, in their chosen language, and writes `swe-team.config.json` on their behalf. The
-user never touches a config file manually.
+`swe-team:onboard` is a choice-driven setup wizard. It **auto-detects** project settings,
+presents them as **numbered options with a highlighted default**, collects answers, and
+writes `swe-team.config.json` only after showing the user a full **confirmation brief**.
 
-Run this skill whenever a teammate is setting up swe-team for the first time, or when
-they want to reconfigure an existing install. The skill is fully idempotent: running it
-again overwrites only the config file, nothing else.
+Design principles:
+- Start in English. Switch to the user's chosen language after Section 0.
+- Every input is a numbered pick from a concrete list — never open-ended unless unavoidable.
+- Auto-detected value is always Option 1 (marked `← recommended` or `← detected`).
+- Free-text is only requested for values that cannot be listed: file paths, IDs.
+- After every free-text input, echo back what you understood and ask "correct?".
+- A single full-screen brief summarizes ALL choices before any file is written.
 
 ## When to Use
 
 - `/swe-team-setup` is invoked (first-time or reconfigure).
-- A teammate reports confusion about configuration.
+- A teammate is confused about their existing config.
 - A project's stack, branch, or knowledge source has changed.
 
 ## When NOT to Use
 
-- The run is already in progress (`run.json` exists with `status: running`). Do not reconfigure mid-run.
-- You are inside a spawned subagent context. This skill requires the main thread (user interaction).
+- A run is in progress (`run.json` status = `running`). Do not reconfigure mid-run.
+- Inside a spawned subagent. This skill requires the main conversation thread.
+
+---
 
 ## Process
 
-Work through the sections below **strictly in order**. Ask one section at a time.
-After each answer, confirm what you understood before moving on.
-Use short, friendly sentences — not technical jargon.
-Never show raw JSON to the user until the final confirmation step.
+Work through sections **strictly in order**. Never skip ahead. Never show raw JSON before
+Section 8. All example prompts below are in English — after Section 0, render them in the
+user's chosen language.
 
 ---
 
 ### Section 0 — Language
 
-Before anything else, ask:
+Speak English. Present this as the very first message:
 
-> "What language would you like to use for this setup?
-> (e.g. English, Tiếng Việt, 日本語, Español, ...)"
+```
+👋 Welcome to swe-team setup!
 
-From this point forward, conduct ALL communication in the language the user chose.
-If the user types a language you know, switch immediately.
+What language would you like to use?
+
+  1. English  ← default
+  2. Tiếng Việt
+  3. 日本語
+  4. Español
+  5. Other — type the language name
+```
+
+Switch ALL subsequent communication to the chosen language immediately and permanently.
+If the user types a language name (e.g. "French"), accept it as Option 5.
 
 ---
 
-### Section 1 — Detect project (auto, confirm)
+### Section 1 — Auto-detect project
 
-Run detection silently:
+Run silently before showing anything:
 
 ```bash
-# Stack
-[ -f package.json ] && cat package.json | jq -r '.scripts | {test,lint,typecheck}' 2>/dev/null
-[ -f go.mod ] && echo "go"
-[ -f pyproject.toml ] || [ -f requirements.txt ] && echo "python"
+# Detect stack
+[ -f package.json ]   && HAS_PKG=yes || HAS_PKG=no
+[ -f go.mod ]         && HAS_GO=yes  || HAS_GO=no
+[ -f pyproject.toml ] || [ -f requirements.txt ] && HAS_PY=yes || HAS_PY=no
 
-# Package manager
-[ -f pnpm-lock.yaml ] && echo "pnpm"
-[ -f yarn.lock ] && echo "yarn"
-[ -f package-lock.json ] && echo "npm"
+# Detect package manager
+[ -f pnpm-lock.yaml ]   && PM=pnpm
+[ -f yarn.lock ]        && PM=yarn
+[ -f package-lock.json ] && PM=npm
 
-# Base branch
-git branch -a | grep -E 'origin/(dev|develop|main|master)' | head -1
+# Read scripts from package.json
+TEST_CMD=$(cat package.json 2>/dev/null | jq -r '.scripts.test // ""')
+LINT_CMD=$(cat package.json 2>/dev/null | jq -r '.scripts.lint // ""')
+TYPE_CMD=$(cat package.json 2>/dev/null | jq -r '.scripts.typecheck // .scripts["type-check"] // ""')
+
+# Detect branches
+BRANCHES=$(git branch -a 2>/dev/null \
+  | grep -oE 'origin/(dev|develop|main|master)' \
+  | sed 's/origin\///' | sort -u)
 ```
 
-Then show the user a plain-language summary and ask one confirmation question. Example (in Vietnamese):
+Show a formatted summary (in the user's language from Section 0):
 
-> "Tôi phát hiện dự án của bạn dùng **Node.js + pnpm**, branch chính là **dev**.
-> Lệnh test: `pnpm test` | lint: `pnpm run lint` | typecheck: `pnpm run typecheck`
->
-> Có đúng không? (Gõ 'đúng' để tiếp tục, hoặc sửa nếu cần)"
+```
+─────────────────────────────────
+  Project detected
+─────────────────────────────────
+  Stack     : Node.js
+  Manager   : pnpm
+  Test      : pnpm test
+  Lint      : pnpm run lint
+  Typecheck : pnpm run typecheck
 
-If the user corrects any value, note the correction and continue.
-Never ask for test/lint/typecheck commands explicitly — auto-detect, then confirm.
+  Does this look right?
+
+  1. Yes, continue  ← recommended
+  2. Change test command
+  3. Change lint command
+  4. Change typecheck command
+  5. My stack is different — pick again
+─────────────────────────────────
+```
+
+Handle each choice:
+- **1**: lock values, proceed to Section 2.
+- **2/3/4**: ask free text for that command. Echo: "Test command will be: `<input>`. Correct?" Then return to the summary.
+- **5**: show stack picker:
+  ```
+  Choose your stack:
+    1. Node.js (npm)
+    2. Node.js (pnpm)
+    3. Node.js (yarn)
+    4. Go
+    5. Python
+    6. No test/lint/typecheck (skip verification)
+  ```
+  After picking, ask each command: "What is your test command? (leave blank to skip)"
+
+If no recognizable stack is found, go directly to the stack picker.
 
 ---
 
 ### Section 2 — Base branch
 
-If detection found a clear base branch, confirm it:
+Show only branches that actually exist in the repo:
 
-> "Branch mà PR sẽ được tạo vào là **dev**. Giữ nguyên không?"
+```
+─────────────────────────────────
+  Base branch (PRs will target this)
+─────────────────────────────────
+  1. dev    ← detected
+  2. main
+  3. develop
+  4. master
+  5. Enter a different branch name
+─────────────────────────────────
+```
 
-If not found or ambiguous, ask:
-
-> "PR của bạn nên được tạo vào branch nào? (thường là `dev`, `develop`, hoặc `main`)"
+Mark the first detected branch as default.
+If only one branch exists, show it alone with a confirm prompt.
+If Option 5: ask free text → echo back → "Correct?"
 
 ---
 
 ### Section 3 — Knowledge sources
 
-Ask in plain language:
+```
+─────────────────────────────────
+  Knowledge sources (optional)
+─────────────────────────────────
+  Agents can read your team's docs and internal
+  processes before planning any code changes.
 
-> "Nhóm của bạn có dùng công cụ lưu trữ tài liệu, quy trình nội bộ không?
-> Ví dụ: thư mục wiki local, Notion, Confluence, Linear — hay là chưa có?"
+  Where does your team store documentation?
 
-Based on answer:
+  1. Skip for now  ← recommended if not set up yet
+  2. Local wiki folder (e.g. ~/vault)
+  3. Notion
+  4. Confluence
+  5. Linear (read tickets)
+  6. Multiple sources — add one by one
+─────────────────────────────────
+```
 
-**If "local vault / thư mục local":**
-> "Đường dẫn đến thư mục đó là gì? (ví dụ: ~/vault hoặc /Users/yourname/docs)"
+#### Option 1 — Skip
+Set `knowledge.sources = []`, `write_target = ""`. Proceed to Section 4.
 
-> "Tên của dự án này trong thư mục đó là gì? (dùng để tạo đường dẫn wiki/projects/<tên>)"
+#### Option 2 — Local vault
+Ask path as free text:
+```
+  Path to your wiki folder?
+  (e.g.  ~/vault  or  /Users/yourname/notes)
+  →
+```
+Echo: "Folder: `/Users/yourname/notes`. Correct?"
 
-Ask if they also want to write lessons back after each run:
-> "Sau mỗi lần chạy, swe-team có thể tự ghi bài học vào thư mục đó.
-> Bạn có muốn bật tính năng này không? (có / không)"
+Check existence:
+```bash
+[ -d "<expanded_path>" ] && echo "exists" || echo "missing"
+```
+If missing:
+```
+  ⚠ That folder doesn't exist yet.
 
-**If "Notion":**
-> "Bạn có thể cho tôi biết ID của workspace hoặc database Notion không?
-> (Tìm trong URL Notion của bạn — phần sau dấu `/`, trước dấu `?`)"
+  1. Enter a different path
+  2. Skip for now (set up later with /swe-team-setup)
+```
 
-Ask capabilities: read only, or also write-back?
+If path exists, detect sub-folders and ask namespace:
+```bash
+ls "<vault_path>/wiki/projects/" 2>/dev/null
+```
+```
+  What is this project's name in the wiki?
+  (Used for the path  wiki/projects/<name>)
 
-**If "Confluence":**
-> "Space key của Confluence là gì? (thường là 2–5 chữ in hoa, ví dụ: ENG, PROD)"
+  1. cardiy    ← matches repo name
+  2. my-project
+  3. Enter a different name
+```
+Recommend any folder name that matches the current git repo name.
 
-Ask capabilities: read only, or also write-back?
+Then ask write-back:
+```
+  After each run, write lessons back to this folder?
 
-**If "Linear":**
-> "Tôi sẽ kết nối Linear để đọc ticket liên quan khi phân tích yêu cầu. (chỉ đọc)"
-Set `capabilities: ["read"]`.
+  1. Yes — automatically save lessons  ← recommended
+  2. No  — read only
+```
 
-**If "none / chưa có":**
-Note this and skip. `knowledge.sources = []`.
+#### Option 3 — Notion
+```
+  Notion workspace or database ID?
+  (Find it in the URL: notion.so/.../[ID-here])
+  →
+```
+Echo + confirm. Then:
+```
+  Access level:
 
-**Multiple sources:**
-Ask for each source separately using the same flow above.
-After all sources collected, ask which one should receive write-back (if any support write).
+  1. Read only  — agents reference Notion when planning
+  2. Read + write — also save lessons after each run
+```
+
+#### Option 4 — Confluence
+```
+  Confluence space key?
+  (Usually 2–5 uppercase letters in the URL, e.g. ENG · PROD · WIKI)
+  →
+```
+Echo + confirm. Same read/write choice as Notion.
+
+#### Option 5 — Linear
+Linear is read-only. Confirm:
+```
+  Linear will be used to read related tickets when analyzing requirements.
+  Read-only — no writes.
+
+  1. Add Linear  ← recommended
+  2. Skip
+```
+
+#### Option 6 — Multiple sources
+After each source is added:
+```
+  Source 1 added: local vault ~/vault
+
+  Add another source?
+  1. Add Notion
+  2. Add Confluence
+  3. Add Linear
+  4. Done — no more sources
+```
+If more than one source supports write, ask:
+```
+  Which source should receive lessons after each run?
+  1. local vault ~/vault  ← recommended (supports write)
+  2. Notion <id>          (supports write)
+  3. Don't write lessons anywhere
+```
 
 ---
 
 ### Section 4 — Budget
 
-Show defaults clearly, ask if they want to change:
+```
+─────────────────────────────────
+  Cost limit per run
+─────────────────────────────────
+  1. Standard — $15 · 2M tokens   ← recommended
+  2. Light    — $5  · 500K tokens  (small projects, simple tasks)
+  3. Heavy    — $30 · 4M tokens   (large codebase, complex tasks)
+  4. Custom   — enter your own limits
+─────────────────────────────────
+```
 
-> "Mỗi lần chạy, swe-team mặc định giới hạn **$15** và **2 triệu tokens**.
-> Giữ nguyên không? (hoặc cho tôi biết giới hạn bạn muốn)"
+If Option 4:
+```
+  USD limit per run? (e.g. 10)
+  →
 
-Only ask further if they want to change.
+  Token limit? (e.g. 1000000)
+  →
+```
+Echo both. "Correct?"
 
 ---
 
-### Section 5 — Security
+### Section 5 — Security policy
 
-Ask simply:
+```
+─────────────────────────────────
+  Security policy
+─────────────────────────────────
+  When a vulnerability is found in the code
+  (SQL injection, exposed secrets, XSS, etc.):
 
-> "Khi phát hiện lỗ hổng bảo mật nghiêm trọng (ví dụ: SQL injection, lộ secret):
-> - Chặn PR lại để sửa (khuyến nghị)
-> - Hoặc chỉ cảnh báo trong nội dung PR
->
-> Bạn chọn hướng nào?"
+  1. Strict — Block the PR, require a fix  ← recommended
+     (critical + high → block · medium → warn in PR)
 
-Map to:
-- "Chặn PR" → `fail_on: ["critical", "high"]`
-- "Chỉ cảnh báo" → `fail_on: []`, `warn_on: ["critical", "high", "medium"]`
+  2. Balanced — Warn but still open PR
+     (all severities → noted in PR body)
+
+  3. Off — No security scanning
+─────────────────────────────────
+```
+
+Map:
+- 1 → `fail_on: ["critical","high"]`, `warn_on: ["medium"]`
+- 2 → `fail_on: []`, `warn_on: ["critical","high","medium"]`
+- 3 → `enabled: false`
 
 ---
 
 ### Section 6 — Clarification mode
 
-Ask:
+```
+─────────────────────────────────
+  Requirement clarification
+─────────────────────────────────
+  Before coding, swe-team analyzes the requirement.
+  How should it handle ambiguity?
 
-> "Trước khi code, swe-team thường tự phân tích yêu cầu và đưa ra giả định mà không hỏi bạn.
-> Hay bạn muốn nó hỏi bạn 3–5 câu để xác nhận trước khi bắt đầu?
->
-> - Tự xử lý (nhanh hơn, chạy không giám sát)
-> - Hỏi tôi trước (chậm hơn nhưng chính xác hơn)"
+  1. Autonomous  ← recommended
+     Analyzes and makes assumptions from the codebase.
+     Doesn't ask you. Faster. Good for unattended runs.
 
-Map to `clarify.mode: "autonomous" | "interactive"`.
+  2. Interactive
+     Asks you 3–5 clarifying questions before starting.
+     More precise. Requires you to be available.
+─────────────────────────────────
+```
 
 ---
 
-### Section 7 — Write config
+### Section 7 — PR settings
 
-Now you have all answers. DO NOT show the raw JSON yet. Instead, show a plain-language summary:
-
-> "Tôi sẽ cấu hình swe-team như sau:
->
-> - Dự án: Node.js + pnpm | Branch: dev
-> - Giới hạn: $15 / lần chạy
-> - Bảo mật: Chặn PR nếu phát hiện lỗ hổng nghiêm trọng
-> - Clarify: Tự động phân tích (không hỏi bạn)
-> - Kho tri thức: ~/vault (đọc + ghi) · Notion abc123 (chỉ đọc)
->
-> Xác nhận để tôi ghi cấu hình? (có / không)"
-
-If confirmed, write `swe-team.config.json`:
-
-```bash
-cat > swe-team.config.json << 'ENDOFCONFIG'
-{
-  "$schema": "./.claude/references/config-schema.json",
-  "version": "<VERSION from .claude/swe-team/VERSION>",
-  "models": {
-    "lead": "opus",
-    "coder": "sonnet",
-    "verifier_mech": "haiku",
-    "verifier_sem": "sonnet",
-    "pr": "sonnet"
-  },
-  "budget": { ... },
-  "limits": { ... },
-  "branch": { "base": "<detected>", "prefix": "swe/", "auto_detect_base": true },
-  "verification": { "test_cmd": "<detected>", "lint_cmd": "<detected>", "typecheck_cmd": "<detected>", "test_globs": [...], "allow_flaky_retry": true },
-  "clarify": { "enabled": true, "mode": "<autonomous|interactive>", "max_questions": 5 },
-  "security": { "enabled": true, "fail_on": [...], "warn_on": [...] },
-  "retro": { "enabled": true, "max_learnings_per_run": 5, "learnings_window": 10 },
-  "phases": { "define_threshold": 3, "force_define": false, "skip_define": false, "skip_clarify": false },
-  "gh": { "pr_labels": ["ai-generated", "swe-team"], "pr_draft": false, "require_clean_working_tree": true },
-  "knowledge": { "sources": [...], "write_target": "..." }
-}
-ENDOFCONFIG
 ```
-
-Fill in all values from the user's answers. Never use placeholder strings in the final file.
+─────────────────────────────────
+  Pull Request type
+─────────────────────────────────
+  1. Regular PR (ready for review)  ← recommended
+  2. Draft PR (marked as work-in-progress)
+─────────────────────────────────
+```
 
 ---
 
-### Section 8 — Verify
+### Section 8 — Confirmation brief (REQUIRED before any write)
 
-After writing, run a quick validation:
+After all sections answered, show a complete summary. Do NOT write any file before this.
 
-```bash
-python3 -c "
-import json, sys
-with open('swe-team.config.json') as f:
-    json.load(f)
-print('ok')
-" 2>&1
+```
+══════════════════════════════════════════
+  REVIEW YOUR SWE-TEAM CONFIGURATION
+══════════════════════════════════════════
+
+  📦 Project
+     Stack     : Node.js · pnpm
+     Test      : pnpm test
+     Lint      : pnpm run lint
+     Typecheck : pnpm run typecheck
+     Branch    : dev
+
+  💰 Budget
+     Limit     : $15 per run · 2M tokens
+
+  🔐 Security
+     Policy    : Strict
+     Critical/High → block PR · Medium → warn in PR body
+
+  🧠 Clarification
+     Mode      : Autonomous (no user prompts)
+
+  📚 Knowledge sources
+     1. ~/vault — read + write  (namespace: cardiy)
+     2. Linear — read only
+     Lessons written to: ~/vault
+
+  🔀 Pull Request
+     Type: Regular (not draft)
+
+══════════════════════════════════════════
+  Write this configuration? (yes / no / edit)
+══════════════════════════════════════════
 ```
 
-If validation passes, tell the user:
+- **"yes"** → write config (Section 9).
+- **"no"** → discard and exit.
+- **"edit"** → ask which section to revisit:
+  ```
+  Which section would you like to change?
+  1. Project / Stack
+  2. Branch
+  3. Knowledge sources
+  4. Budget
+  5. Security
+  6. Clarification mode
+  7. Pull Request
+  ```
+  Jump back to that section, then return to the brief.
 
-> "Xong! `swe-team.config.json` đã được ghi.
->
-> Bước tiếp theo:
-> 1. Commit file này: `git add swe-team.config.json && git commit -m 'chore: configure swe-team'`
-> 2. Thử chạy: `/swe-team "Thêm một tính năng nhỏ để test"`"
+---
 
-If validation fails, show the error in plain language and offer to fix it.
+### Section 9 — Write and validate
+
+Write `swe-team.config.json` with all resolved values. No placeholders.
+
+After writing, validate:
+
+```bash
+# JSON syntax
+python3 -c "import json; json.load(open('swe-team.config.json'))" 2>&1
+
+# Schema (if jsonschema available)
+python3 -m jsonschema \
+  --instance swe-team.config.json \
+  --schema .claude/references/config-schema.json 2>&1 || true
+```
+
+If validation fails, show the field name and a plain-language description of the error.
+Never say "edit the JSON manually." Instead:
+```
+  ⚠ Problem: The branch value "<value>" is not valid.
+  1. Fix it now — enter a valid branch name
+  2. Use the default: "dev"
+```
+
+If validation passes:
+
+```
+══════════════════════════════════════════
+  ✓ swe-team.config.json written!
+══════════════════════════════════════════
+
+  Next steps:
+
+  1. Commit the config:
+     git add swe-team.config.json
+     git commit -m "chore: configure swe-team"
+
+  2. Run your first task:
+     /swe-team "Add a small button to test the pipeline"
+
+  Need to change settings later? Run /swe-team-setup again anytime.
+══════════════════════════════════════════
+```
 
 ---
 
@@ -251,23 +463,28 @@ If validation fails, show the error in plain language and offer to fix it.
 
 | Excuse | Rebuttal |
 |---|---|
-| "The user seems technical — I'll just show them the JSON." | Never show raw JSON unless they explicitly ask. The wizard exists precisely to abstract that away. |
-| "I'll ask all questions at once to save time." | One section at a time. Dumping 10 questions at once is overwhelming and causes drop-off. |
-| "I'll skip Section 3 if it seems complex." | Always ask about knowledge sources. A "none" answer is fine — but skipping the question means the user never knows the feature exists. |
-| "I'll use sensible defaults and not ask." | Show the default and ask for confirmation. Silent defaults that are wrong waste the user's first run. |
-| "The user said 'yes' so I'll assume they meant yes to everything." | Confirm each section separately. "Yes" to stack detection is not "yes" to budget limits. |
+| "The user seems technical — I'll ask for raw values." | Always show numbered options first. Free-text is a last resort, only when options can't enumerate the valid set. |
+| "I'll skip the echo-back for free-text inputs." | Always echo back what you heard and ask "correct?". A misread path or ID fails silently at runtime. |
+| "The brief is too long — I'll shorten it." | Show every section in the brief, no omissions. Users cannot catch errors in sections they cannot see. |
+| "User said 'yes' — I can skip showing the brief." | The brief IS the confirmation gate. "yes" must come after reading the brief, not before. |
+| "I'll write the config as I collect each answer." | Write exactly once — after the user confirms the full brief. No partial writes. |
+| "Vault path doesn't exist — I'll create the folder." | Never create vault directories. Warn and offer to skip. |
+| "The user hasn't picked a language yet — I'll use Vietnamese." | Section 0 is in English. Stay in English until the user explicitly picks a language. |
 
 ## Red Flags
 
-- User doesn't know their Notion workspace ID — offer: "You can skip this for now and re-run `/swe-team-setup` later when you have it."
-- User provides a vault path that doesn't exist yet — warn: "That path doesn't exist. Run `vault-init` first, or choose a different path."
-- User changes their mind mid-wizard — restart the affected section, not the whole wizard.
-- JSON validation fails after write — show the specific error field in plain language; never ask the user to "edit the JSON manually."
+- User is confused by the namespace question → explain: "It's just a folder name. Use the project name." Suggest the git repo name as default.
+- User's vault path exists but has no `wiki/` subdirectory → warn: "This doesn't look like an initialized vault. Knowledge features may not work until you run `vault-init`."
+- User enters an empty string for a required free-text field → re-ask with an example.
+- User selects "edit" three times on the same section → ask: "Would you like to skip this section and configure it manually later with /swe-team-setup?"
+- Validation fails after write → fix in-place by re-asking the offending section. Never tell the user to open the file.
 
 ## Verification
 
 After this skill completes:
-- `swe-team.config.json` exists at repo root and is valid JSON.
-- All required fields are populated (no `"auto"` values left unresolved unless intentional).
-- The user has been given the two next-step commands.
-- No raw JSON was shown to the user during the wizard (only in the final confirmation summary if they asked).
+- `swe-team.config.json` exists at repo root, passes JSON syntax check, and passes schema validation.
+- All required fields have real values — no unresolved placeholders.
+- The user confirmed the full brief before the file was written.
+- The user received the two next-step commands.
+- No raw JSON was shown at any point during the wizard.
+- All communication after Section 0 was in the user's chosen language.
