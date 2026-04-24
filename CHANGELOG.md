@@ -2,6 +2,42 @@
 
 All notable changes to this package are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.0] — 2026-04-24
+
+Three new capabilities ported from gstack research: pre-flight clarification, persistent
+retrospective learnings, and OWASP security gate.
+
+### Added
+
+- `.claude/skills/swe-team-clarify/SKILL.md` — CLARIFY phase skill. Runs before DEFINE.
+  Two modes: interactive (asks user 3–5 forcing questions) and autonomous (greps repo for
+  assumptions). Outputs `pre-flight-brief.md` to run dir. Eliminates the majority of mid-BUILD
+  replans caused by misunderstood scope.
+- `.claude/skills/swe-team-retro/SKILL.md` — RETRO phase skill. Runs after every run
+  (succeeded, failed, or aborted). Analyzes budget efficiency and failure patterns. Writes
+  ≥1 project-specific lesson to `.claude/swe-team/learnings.jsonl` (persistent, not in runs/).
+  Future swe-lead reads the last N=10 learnings at startup so each project session teaches the next.
+- `.claude/skills/swe-team-security-review/SKILL.md` — Security review skill. Invoked by
+  swe-verifier-sem in whole-PR mode. Runs OWASP Top 10 grep checks + secret/credential pattern
+  detection. Emits `security_verdict` (pass|warn|fail) and `security_issues[]`. `fail` blocks
+  SHIP and triggers a replan; `warn` proceeds but notes issues in PR body for reviewer.
+
+### Changed
+
+- `SPEC.md` bumped to v0.2.0. Updates in:
+  - §3.1 run dir layout: added `pre-flight-brief.md`, `assumptions.md`, expanded package layout to show `learnings.jsonl`.
+  - §3.4 event kinds: added `phase_enter/exit` for CLARIFY and RETRO phases, `security_review` event, `retro_complete` event, `learning` record.
+  - §3.6 context condensation: swe-lead now reads `learnings.jsonl`; swe-verifier-sem whole-PR row added; swe-pr row reads `security_review` event.
+  - §5 phase flow: CLARIFY inserted before DEFINE, RETRO inserted after SHIP. Both phases shown in ASCII diagram.
+  - §6 skills catalog: 3 new skills added; directory column added.
+  - §9.3 whole-PR checks: `security_verdict != fail` added as blocking condition.
+  - §9.4 (new): security review evidence schema — `security_verdict`, `security_issues[]` with per-issue `{severity, category, file, line, snippet}`.
+  - §9.5 (was §9.4): anti-rationalization enforcement.
+  - §10 config: added `clarify`, `security`, `retro` top-level keys with defaults; `phases.skip_clarify`; version bumped to 0.2.0.
+- `swe-lead.md` agent: CLARIFY step (step 2) added before DEFINE. Learnings loaded at startup (step 1a). RETRO (step 9) added after SHIP. BUILD loop references renumbered (5–9 instead of 4–7). Invariants and Skills sections updated.
+- `swe-verifier-sem.md` agent: whole-PR mode step 7 added (invoke `swe-team:security-review`). Blocking condition updated. Invariants and Skills sections updated.
+- `.claude/swe-team/config.default.json`: version 0.2.0; added `clarify`, `security`, `retro` blocks; added `phases.skip_clarify`.
+
 ## [0.1.1] — 2026-04-23
 
 OSS research + hardening pass. Derived from a deep-research sweep of

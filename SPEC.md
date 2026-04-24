@@ -1,7 +1,7 @@
 # swe-team — Specification (SoT)
 
-> **Status**: v0.1.0 — MVP
-> **Last updated**: 2026-04-23
+> **Status**: v0.2.0
+> **Last updated**: 2026-04-24
 > **Authority**: This document is the Single Source of Truth. All code, configs, schemas, and agent prompts MUST derive from it. If code and spec disagree, the spec is right and the code is a bug.
 
 ---
@@ -89,11 +89,19 @@ Claude Code provides: isolated-context subagents (Task tool), file-based agent d
 ├── tasks.json                # authoritative task list (append-only updates)
 ├── phase_state.json          # current phase, active task, counters
 ├── events.jsonl              # system + lead events
+├── pre-flight-brief.md       # clarify output: clarified req, key decisions, out-of-scope
+├── assumptions.md            # autonomous-mode assumptions (omitted in interactive mode)
+├── spec.md                   # DEFINE output: acceptance bullets, file hints, open questions
 ├── build/
 │   └── task-<task_id>.jsonl  # one file per task (coder actions/observations)
-├── verification.jsonl        # mech + sem verdicts
+├── verification.jsonl        # mech + sem + security_review verdicts
 ├── budget.json               # cumulative tokens + USD
 └── pr.json                   # final PR metadata (url, number, branch)
+
+.claude/swe-team/
+├── learnings.jsonl           # PERSISTENT — cross-run lessons (NOT under runs/)
+├── config.json               # per-project config override
+└── config.default.json       # defaults shipped with the package
 ```
 
 **Split rationale**: concurrent appends from independent agents/hooks can race. Per-phase / per-task files eliminate the race without file locks. `events.jsonl` is reserved for system and lead; coder writes to `build/task-<id>.jsonl`; verifiers write to `verification.jsonl`.
@@ -158,11 +166,12 @@ All events are line-delimited JSON. Every event has:
 
 | kind | Fields | Emitter |
 |---|---|---|
-| `phase_enter` | `phase`: `DEFINE\|PLAN\|BUILD\|VERIFY\|SHIP` | swe-lead / system |
+| `phase_enter` | `phase`: `CLARIFY\|DEFINE\|PLAN\|BUILD\|VERIFY\|SHIP\|RETRO` | swe-lead / system |
 | `phase_exit` | `phase`, `ok`: bool | swe-lead / system |
 | `action` | `task_id`, `tool`, `target` (file or command), `args_summary` | coder / lead |
 | `observation` | `task_id`, `tool`, `exit_code`, `stdout_sha256`, `summary` (≤200 chars) | coder (via hook) |
 | `verification` | `task_id`, `tier`: `mech\|sem`, `verified`: bool, `evidence`: object (§ 9) | verifier-mech / verifier-sem |
+| `security_review` | `security_verdict`: `pass\|warn\|fail`, `security_issues`: array | verifier-sem (via security-review skill) |
 | `blocker` | `task_id`, `reason`, `proposed_resolution` | coder |
 | `replan` | `count`, `reason`, `appended_task_ids`: string[] | swe-lead |
 | `budget_warn` | `pct`, `tokens`, `usd` | system (hook) |
@@ -170,6 +179,8 @@ All events are line-delimited JSON. Every event has:
 | `stuck` | `task_id`, `pattern`: see § 8, `details` | system (hook) |
 | `run_complete` | `pr_url`, `branch` | swe-pr |
 | `run_abort` | `reason` | swe-lead / system |
+| `retro_complete` | `metrics`: `{tasks_total, tasks_done, replans, mech_fails}`, `lessons_written`: int | swe-lead (via retro skill) |
+| `learning` | `scope`: `planning\|verification\|requirement\|build`, `lesson`: string, `evidence_run_id` | appended to `learnings.jsonl` NOT events.jsonl |
 
 ### 3.5 Ground-truth rule (anti-hallucination)
 
@@ -188,11 +199,12 @@ Each agent, at the start of its turn, re-reads:
 
 | Agent | Reads |
 |---|---|
-| `swe-lead` | `run.json`, `tasks.json`, `phase_state.json`, last N=50 events from `events.jsonl`, all `blocker` + `verification` entries |
+| `swe-lead` | `run.json`, `tasks.json`, `phase_state.json`, last N=50 events from `events.jsonl`, all `blocker` + `verification` entries, last N=10 learnings from `learnings.jsonl` |
 | `swe-coder` (task T_i) | `run.json`, `tasks.json` entry for T_i only, `build/task-T_i.jsonl`, files in `touch_files` |
 | `swe-verifier-mech` | `tasks.json` entry for T_i, `git diff <base>..HEAD` for T_i commit, raw test/lint output |
 | `swe-verifier-sem` | `tasks.json` entry for T_i, `git diff` for T_i commit, mech verdict, `run.json.requirement` |
-| `swe-pr` | `run.json`, `tasks.json`, `verification.jsonl` (all), `git log <base>..HEAD` |
+| `swe-verifier-sem` (whole-PR) | `run.json`, `tasks.json`, full `git diff <base>..HEAD`, `verification.jsonl` (all) |
+| `swe-pr` | `run.json`, `tasks.json`, `verification.jsonl` (all), `git log <base>..HEAD`, `security_review` event |
 
 Each agent receives the above as structured text injected into its spawn prompt by the caller (main thread or swe-lead). Nothing else.
 
@@ -230,13 +242,23 @@ All agents live in `.claude/agents/`. Frontmatter fields: `name`, `description`,
         │
         ▼
  ┌───────────────┐
+ │   CLARIFY     │  swe-lead — always runs (unless skip_clarify=true)
+ └───────────────┘
+   │
+   │ interactive mode: ask user 3–5 questions, wait for answers
+   │ autonomous mode:  grep repo, write assumptions.md
+   │ output: pre-flight-brief.md
+   │
+   │ SIZE GATE: if clarify returns needs-split → abort (no DEFINE/PLAN)
+   ▼
+ ┌───────────────┐
  │   DEFINE?     │  conditional
  └───────────────┘
    │           │
    │ skip      │ run (ambiguity score ≥ threshold)
    │           │
    │           ▼
-   │      swe-lead: expand requirement → spec.md (appended as `define` events)
+   │      swe-lead: expand requirement → spec.md (consults pre-flight-brief.md)
    │           │
    └─────┬─────┘
          ▼
@@ -244,7 +266,7 @@ All agents live in `.claude/agents/`. Frontmatter fields: `name`, `description`,
  │     PLAN      │  swe-lead
  └───────────────┘
    │
-   │ output: tasks.json v1
+   │ output: tasks.json v1 (informed by pre-flight-brief.md + learnings.jsonl)
    │ gate: no task >10 files; every task has ≥1 acceptance
    │
    │ SIZE GATE: if total est. LOC > 500 OR task count > 15
@@ -259,7 +281,8 @@ All agents live in `.claude/agents/`. Frontmatter fields: `name`, `description`,
    │   swe-verifier-mech(commit)
    │     fail → revision back to swe-coder (counts vs iter budget)
    │     pass → swe-verifier-sem(commit)
-   │       fail → revision OR re-plan
+   │       fail (spec_gap | security_fail) → re-plan
+   │       fail (other) → revision
    │       pass → mark task done
    │   if blocker event → swe-lead.replan() (max 2)
    │   if stuck event  → abort
@@ -269,16 +292,27 @@ All agents live in `.claude/agents/`. Frontmatter fields: `name`, `description`,
  └───────────────┘
    │
    │ input: full diff <base>..HEAD
-   │ checks: requirement coverage %, cross-task conflicts
+   │ checks: requirement coverage %, cross-task conflicts, security verdict
+   │   swe-team:security-review → OWASP + secret scan → pass|warn|fail
+   │   warn: recorded in PR body, does NOT block
+   │   fail: triggers re-plan targeting vulnerable code
    ▼
  ┌───────────────┐
  │     SHIP      │  swe-pr
  └───────────────┘
    │
    │ git push origin <branch>
-   │ gh pr create --base <base> --body <generated>
+   │ gh pr create --base <base> --body <generated + security_issues if warn>
    ▼
- [run_complete]
+ ┌───────────────┐
+ │     RETRO     │  swe-lead (always — even on fail/abort)
+ └───────────────┘
+   │
+   │ analyze: budget efficiency, failure patterns, what worked
+   │ append: ≥1 lesson to .claude/swe-team/learnings.jsonl
+   │ emit: retro_complete event
+   ▼
+ [run terminal]
 ```
 
 ### 5.1 DEFINE trigger (heuristic)
@@ -324,22 +358,26 @@ A `blocker` event from swe-coder or a `verification` fail with `reason=spec_gap`
 
 ## 6. Skills Catalog
 
-Skills live at `.claude/skills/<skill-name>/SKILL.md`. Each has the addyosmani format: `Overview → When to Use → Process → Anti-Rationalizations → Red Flags → Verification`.
+Skills live at `.claude/skills/<skill-name>/SKILL.md`. Each has the addyosmani format: `Overview → When to Use → When NOT to Use → Process → Anti-Rationalizations → Red Flags → Verification`.
 
-| Skill | Phase | Invoked by | Purpose |
-|---|---|---|---|
-| `swe-team:define-spec` | DEFINE | swe-lead | Expand an ambiguous requirement into a spec with acceptance bullets and file hints. |
-| `swe-team:decompose-tasks` | PLAN | swe-lead | Produce tasks.json conforming to schema. Enforces size, touch_files, acceptance. |
-| `swe-team:coder-loop` | BUILD | swe-coder | Per-task edit→test→commit loop with iteration cap discipline. |
-| `swe-team:verify-mechanical` | VERIFY | swe-verifier-mech | Runs deterministic shell checks (tests, lint, typecheck) and computes evidence fields. |
-| `swe-team:detect-gaming` | VERIFY | swe-verifier-mech | Exact shell checks for test deletion, new `.skip`/`.only`, assertion count drops. |
-| `swe-team:verify-semantic` | VERIFY | swe-verifier-sem | Acceptance matching, scope audit, adversarial review. Requires evidence fields in verdict. |
-| `swe-team:anti-rationalize` | VERIFY | both verifiers | Forbid hedging. Reject verdicts using "probably"/"should work"/"looks correct" without evidence. |
-| `swe-team:detect-stuck` | BUILD | system (hook) | Pattern match: identical commits, identical test sha, file churn, stall. |
-| `swe-team:replan` | BUILD→PLAN | swe-lead | Append-only task addition, increments version, enforces cap. |
-| `swe-team:budget-check` | all | system (hook) | Token + USD ceiling arithmetic. |
-| `swe-team:condense-context` | all | spawning agent | Produce the per-agent context slice per § 3.6. |
-| `swe-team:open-pr` | SHIP | swe-pr | `gh pr create` with structured body derived from events + verification logs. |
+| Skill | Directory | Phase | Invoked by | Purpose |
+|---|---|---|---|---|
+| `swe-team:clarify` | `swe-team-clarify` | CLARIFY | swe-lead | Pre-flight requirement clarification. Produces `pre-flight-brief.md`. Two modes: interactive (user Q&A) and autonomous (assumption-based). |
+| `swe-team:define-spec` | `swe-team-define-spec` | DEFINE | swe-lead | Expand an ambiguous requirement into a spec with acceptance bullets and file hints. Reads `pre-flight-brief.md`. |
+| `swe-team:decompose-tasks` | `swe-team-decompose-tasks` | PLAN | swe-lead | Produce tasks.json conforming to schema. Enforces size, touch_files, acceptance. |
+| `swe-team:coder-loop` | `swe-team-coder-loop` | BUILD | swe-coder | Per-task edit→test→commit loop with iteration cap discipline. |
+| `swe-team:verify-mechanical` | `swe-team-verify-mechanical` | VERIFY | swe-verifier-mech | Runs deterministic shell checks (tests, lint, typecheck) and computes evidence fields. |
+| `swe-team:detect-gaming` | `swe-team-detect-gaming` | VERIFY | swe-verifier-mech | Exact shell checks for test deletion, new `.skip`/`.only`, assertion count drops. |
+| `swe-team:verify-semantic` | `swe-team-verify-semantic` | VERIFY | swe-verifier-sem | Acceptance matching, scope audit, adversarial review. Requires evidence fields in verdict. |
+| `swe-team:security-review` | `swe-team-security-review` | VERIFY | swe-verifier-sem | OWASP Top 10 + secret detection over full PR diff. Emits `security_verdict` (pass\|warn\|fail). fail blocks SHIP. |
+| `swe-team:anti-rationalize` | `swe-team-anti-rationalize` | VERIFY | both verifiers | Forbid hedging. Reject verdicts using "probably"/"should work"/"looks correct" without evidence. |
+| `swe-team:detect-stuck` | `swe-team-detect-stuck` | BUILD | system (hook) | Pattern match: identical commits, identical test sha, file churn, stall. |
+| `swe-team:replan` | `swe-team-replan` | BUILD→PLAN | swe-lead | Append-only task addition, increments version, enforces cap. |
+| `swe-team:budget-check` | `swe-team-budget-check` | all | system (hook) | Token + USD ceiling arithmetic. |
+| `swe-team:condense-context` | `swe-team-condense-context` | all | spawning agent | Produce the per-agent context slice per § 3.6. |
+| `swe-team:open-pr` | `swe-team-open-pr` | SHIP | swe-pr | `gh pr create` with structured body derived from events + verification logs. |
+| `swe-team:retro` | `swe-team-retro` | RETRO | swe-lead | Post-run retrospective. Writes ≥1 lesson to `learnings.jsonl`. Runs on every terminal status. |
+| `swe-team:context-prime` | `swe-team-context-prime` | all | any agent | Start-of-turn re-grounding: re-reads run dir anchors, injects recent events, surfaces active learnings. |
 
 ---
 
@@ -475,9 +513,34 @@ After all tasks have per-commit mech+sem verified, one final sem pass runs over 
 }
 ```
 
-Blocking threshold: `requirement_coverage_pct >= 70`, `cross_task_conflicts == []`.
+Blocking threshold: `requirement_coverage_pct >= 70`, `cross_task_conflicts == []`, `security_verdict != "fail"`.
 
-### 9.4 Anti-rationalization enforcement
+### 9.4 Security Review tier (swe-team:security-review, called within whole-PR pass)
+
+A separate `security_review` event is appended to `verification.jsonl` by the security-review skill. Required fields:
+
+```jsonc
+{
+  "kind": "security_review",
+  "security_verdict": "pass",        // pass | warn | fail
+  "security_issues": [               // empty if verdict=pass; non-empty otherwise
+    {
+      "severity": "high",            // critical | high | medium | low
+      "category": "A03-Injection",   // OWASP category tag
+      "file": "src/api/users.ts",
+      "line": 42,
+      "snippet": "query = 'SELECT * FROM users WHERE id=' + req.params.id"
+    }
+  ]
+}
+```
+
+Verdict rule:
+- Any `critical` or `high` issue → `security_verdict: fail` → whole-PR `verified:false` with `reason:"security_fail"` → swe-lead triggers replan.
+- Any `medium` issue (no critical/high) → `security_verdict: warn` → SHIP proceeds; issues recorded in PR body for reviewer.
+- Only `low` or no issues → `security_verdict: pass` → no PR annotation.
+
+### 9.5 Anti-rationalization enforcement
 
 The `swe-team:anti-rationalize` skill is invoked inside both verifier prompts. It rejects any verdict string that:
 
@@ -495,7 +558,7 @@ File: `swe-team.config.json` at repo root. Schema: `.claude/references/config-sc
 ```jsonc
 {
   "$schema": "./.claude/references/config-schema.json",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "models": {
     "lead": "opus",
     "coder": "sonnet",
@@ -529,10 +592,26 @@ File: `swe-team.config.json` at repo root. Schema: `.claude/references/config-sc
     "test_globs": ["**/*.test.*", "**/*.spec.*", "**/tests/**", "**/test/**"],
     "allow_flaky_retry": true
   },
+  "clarify": {
+    "enabled": true,               // set false to skip CLARIFY entirely
+    "mode": "autonomous",          // "autonomous" | "interactive"
+    "max_questions": 5
+  },
+  "security": {
+    "enabled": true,               // set false to skip OWASP scan
+    "fail_on": ["critical", "high"],   // severities that block SHIP
+    "warn_on": ["medium"]
+  },
+  "retro": {
+    "enabled": true,               // set false to skip RETRO
+    "max_learnings_per_run": 5,
+    "learnings_window": 10         // how many past learnings swe-lead reads
+  },
   "phases": {
     "define_threshold": 3,
     "force_define": false,
-    "skip_define": false
+    "skip_define": false,
+    "skip_clarify": false
   },
   "gh": {
     "pr_labels": ["ai-generated", "swe-team"],

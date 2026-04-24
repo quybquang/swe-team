@@ -7,3 +7,6 @@ __pycache__/
 # swe-team: per-run state is local audit trail, not source
 .claude/swe-team/runs/*
 !.claude/swe-team/runs/.gitkeep
+
+# swe-team: persistent learnings are project-local, not source
+.claude/swe-team/learnings.jsonl

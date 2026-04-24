@@ -1,6 +1,6 @@
 {
   "$schema": "../references/config-schema.json",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "models": {
     "lead": "opus",
     "coder": "sonnet",
@@ -34,10 +34,26 @@
     "test_globs": ["**/*.test.*", "**/*.spec.*", "**/tests/**", "**/test/**"],
     "allow_flaky_retry": true
   },
+  "clarify": {
+    "enabled": true,
+    "mode": "autonomous",
+    "max_questions": 5
+  },
+  "security": {
+    "enabled": true,
+    "fail_on": ["critical", "high"],
+    "warn_on": ["medium"]
+  },
+  "retro": {
+    "enabled": true,
+    "max_learnings_per_run": 5,
+    "learnings_window": 10
+  },
   "phases": {
     "define_threshold": 3,
     "force_define": false,
-    "skip_define": false
+    "skip_define": false,
+    "skip_clarify": false
   },
   "gh": {
     "pr_labels": ["ai-generated", "swe-team"],

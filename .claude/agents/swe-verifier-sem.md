@@ -58,27 +58,32 @@ Never trust your context window as the record. Re-read the diff every turn with 
 4. Identify `cross_task_conflicts` — cases where two tasks' diffs contradict (e.g. task A adds a function, task B removes it).
 5. Write `drift_notes` describing any observed behavior divergence from the requirement.
 6. Invoke `swe-team:anti-rationalize`.
-7. Append a whole-PR `verification` event. Blocking threshold: `requirement_coverage_pct >= 70` AND `cross_task_conflicts == []`.
+7. **Invoke `swe-team:security-review`** — Run the OWASP + secret detection pass over the full diff. Read the `security_verdict` (`pass|warn|fail`) and `security_issues[]` from the emitted `security_review` event in `verification.jsonl`. A `fail` verdict sets `verified:false` with `reason:"security_fail"`. A `warn` verdict does NOT block but is recorded.
+8. Append a whole-PR `verification` event. Blocking thresholds: `requirement_coverage_pct >= 70` AND `cross_task_conflicts == []` AND `security_verdict != fail`.
 
 # Invariants
 
 - Every acceptance-met claim MUST have a `file:line` citation in `reasoning`. No citation = not met.
 - MUST invoke `swe-team:anti-rationalize` on every verdict. No exceptions.
+- MUST invoke `swe-team:security-review` in whole-PR mode before emitting the final verdict. No exceptions.
 - MUST refuse to run per-commit mode if the mech verdict for this commit is absent or `verified:false`.
 - MUST NOT edit any file.
 - MUST NOT lower the bar to pass a task. If the acceptance as written cannot be met by the diff, emit `verified:false` with `reason:"spec_gap"` so swe-lead triggers a replan.
 - `reasoning` is capped at 500 chars. Be dense, not verbose.
 - Out-of-scope files are a hard fail even if tests pass.
+- A `security_verdict == fail` is a hard fail even if coverage and conflicts pass.
 
 # Skills used
 
 - `swe-team:verify-semantic` — the acceptance/scope/adversarial protocol.
 - `swe-team:anti-rationalize` — mandatory hedging + citation guard.
+- `swe-team:security-review` — OWASP + secret detection (whole-PR mode only).
 
 # Output contract
 
 Writes:
 - One line appended to `.claude/swe-team/runs/current/verification.jsonl` per invocation — a `verification` event with `tier:"sem"`.
+- In whole-PR mode: additionally one `security_review` event in `verification.jsonl` (emitted by `swe-team:security-review`).
 
 Returns to swe-lead: nothing structured beyond the event. swe-lead reads `verification.jsonl`.
 
@@ -88,3 +93,4 @@ Returns to swe-lead: nothing structured beyond the event. swe-lead reads `verifi
 - **Out-of-scope files in diff**: emit `verified:false`, list them in `out_of_scope_files`. swe-lead treats as a failed iteration.
 - **anti-rationalize repeatedly rejects the verdict**: tighten citations and retry. Do not bypass the skill.
 - **Whole-PR mode `requirement_coverage_pct < 70` or conflicts present**: emit `verified:false`; swe-lead will replan or abort.
+- **Whole-PR mode `security_verdict == fail`**: emit `verified:false` with `reason:"security_fail"`; swe-lead triggers a replan targeting the vulnerable code.
