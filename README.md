@@ -1,126 +1,223 @@
 # swe-team
 
-> A Claude Code-native agent team for production software work. Point it at a requirement, get back a PR into `dev`.
+> Type a requirement. Get a PR.
 
-**Status**: v0.1.0 MVP. Spec-first. All behavior is defined in [`SPEC.md`](./SPEC.md) — that document is authoritative. If code disagrees with the spec, the code is wrong.
+A Claude Code-native agent team that takes a requirement and autonomously runs **CLARIFY → DEFINE → PLAN → BUILD → VERIFY → SHIP → RETRO** — then opens a pull request for human review. No mid-flow gates. File-based. Observable.
+
+[![Version](https://img.shields.io/badge/version-0.2.0-blue)](#) [![Claude Code](https://img.shields.io/badge/Claude%20Code-native-blueviolet)](#) [![License](https://img.shields.io/badge/license-MIT-green)](#)
 
 ---
 
-## What it does
+## How it works
 
-1. You run `/swe-team <requirement-or-URL>` inside Claude Code.
-2. An orchestrator agent (`swe-lead`) creates a run directory, expands ambiguous requirements, and produces a task plan.
-3. A coder agent implements each task, one commit at a time, on a fresh `swe/…` branch.
-4. Two verifier tiers check every commit — a deterministic mechanical tier (tests/lint/typecheck + test-gaming heuristics) and a semantic tier (acceptance match + scope audit + adversarial review).
-5. A PR agent opens the PR into your configured base branch (`dev` by default) with a structured body derived from the event log.
-6. A human reviews and merges.
+```
+You type:
+  /swe-team "Add booking form — user picks date, time, service type"
 
-Everything is file-based and observable in `.claude/swe-team/runs/<run-id>/`. Nothing leaves your machine except model API calls.
+                        ┌─────────────────────────────────────────┐
+                        │              swe-lead  (Opus)            │
+                        └───┬─────────────────────────────────────┘
+                            │
+              ┌─────────────▼──────────────┐
+              │  CLARIFY                   │  Asks 3–5 forcing questions
+              │  → pre-flight-brief.md     │  (or auto-resolves from repo)
+              └─────────────┬──────────────┘
+                            │
+              ┌─────────────▼──────────────┐
+              │  DEFINE  (if ambiguous)    │  Expands req → spec.md
+              │  → acceptance bullets      │  with testable acceptance criteria
+              └─────────────┬──────────────┘
+                            │
+              ┌─────────────▼──────────────┐
+              │  PLAN                      │  Decomposes into tasks
+              │  → tasks.json              │  ≤15 tasks · ≤500 LOC · ≤10 files/task
+              └─────────────┬──────────────┘
+                            │
+              ┌─────────────▼──────────────┐   ┌─────────────────────────┐
+              │  BUILD  (per task)         │──▶│  swe-coder  (Sonnet)    │
+              │                            │   │  1 task → 1 commit      │
+              └─────────────┬──────────────┘   └─────────────────────────┘
+                            │
+              ┌─────────────▼──────────────┐   ┌─────────────────────────┐
+              │  VERIFY  (per commit)      │──▶│  swe-verifier-mech      │
+              │                            │   │  tests · lint · typecheck│
+              │                            │──▶│  swe-verifier-sem       │
+              │                            │   │  acceptance · scope ·   │
+              │                            │   │  security (OWASP)       │
+              └─────────────┬──────────────┘   └─────────────────────────┘
+                            │
+              ┌─────────────▼──────────────┐   ┌─────────────────────────┐
+              │  SHIP                      │──▶│  swe-pr  (Sonnet)       │
+              │                            │   │  gh pr create → dev     │
+              └─────────────┬──────────────┘   └─────────────────────────┘
+                            │
+              ┌─────────────▼──────────────┐
+              │  RETRO                     │  Writes lessons learned
+              │  → learnings.jsonl         │  (used in future runs)
+              └────────────────────────────┘
 
-## Why multi-agent
+You review the PR.
+```
 
-Long-horizon single-agent runs fail on error accumulation — small mistakes at step 3/20 compound by step 15. Phase boundaries + evidence gates localize errors. The trade-off (context coherence loss) is addressed by having every agent re-read `run.json`, `tasks.json`, and `phase_state.json` at the start of every turn. See [`docs/AGENT_DESIGN.md`](./docs/AGENT_DESIGN.md) (added after OSS-research pass) for the full rationale.
+---
 
 ## Quickstart
 
-```bash
-git clone <this-repo> swe-team
-cd /path/to/your/project
-/path/to/swe-team/scripts/install.sh .
-git add .claude/ swe-team.config.json .gitignore
-git commit -m "chore: install swe-team v0.1.0"
+**Step 1 — Install into your project**
 
-# Open your project in Claude Code
-claude
-# inside Claude Code:
-/swe-team "Add a dark-mode toggle to the site header. Persist in localStorage."
+```bash
+git clone https://github.com/quybquang/swe-team
+cd /path/to/your-project
+/path/to/swe-team/scripts/install.sh .
 ```
 
-The installer:
+The installer auto-detects your stack (npm/pnpm/yarn/go/python), base branch, and test/lint/typecheck commands. It merges `settings.json` without overwriting existing hooks.
 
-- Copies `.claude/agents/swe-*.md`, `.claude/skills/swe-team-*/`, the slash command, references, and hooks.
-- Merges `.claude/settings.json` (preserves existing hooks).
-- Auto-detects test/lint/typecheck commands from `package.json` / `go.mod` / `pyproject.toml`.
-- Auto-detects the base branch (`dev` → `develop` → `main` → `master`).
-- Writes `swe-team.config.json` at the repo root.
-- Adds `.claude/swe-team/runs/*` to `.gitignore` (runs are local audit trail, not source).
+**Step 2 — Commit the installed files**
 
-## What lives where
+```bash
+git add .claude/ swe-team.config.json .gitignore
+git commit -m "chore: install swe-team"
+```
+
+**Step 3 — Run it**
+
+```bash
+claude   # open Claude Code inside your project
+
+# inside Claude Code:
+/swe-team "Add a dark-mode toggle to the site header. Persist in localStorage."
+
+# or point at a ticket:
+/swe-team https://linear.app/my-team/issue/APP-42
+```
+
+The team runs autonomously. When it finishes, there's a PR waiting for your review.
+
+---
+
+## The team
+
+| Agent | Model | What it does |
+|---|---|---|
+| `swe-lead` | Opus | Orchestrates all phases. Only agent that can re-plan. Reads `learnings.jsonl` at startup so past runs inform current decisions. |
+| `swe-coder` | Sonnet | Implements one task → one commit. Never touches files outside the task's declared scope. |
+| `swe-verifier-mech` | Haiku | Runs tests/lint/typecheck. Checks for deleted tests, added `.skip`/`.only`, assertion count drops. No evidence = invalid verdict. |
+| `swe-verifier-sem` | Sonnet | Acceptance matching with `file:line` citations. Scope audit. OWASP security scan in whole-PR mode. Blocked unless mech passed. |
+| `swe-pr` | Sonnet | Composes PR body from run state + security issues. `gh pr create`. No force-push ever. |
+
+---
+
+## Safety rails
+
+| Guard | Behaviour |
+|---|---|
+| Iteration cap | S=2 · M=4 · L=6 retries per task before escalation |
+| Re-plan cap | Max 2 re-plans per run, then abort |
+| Budget ceiling | 2M tokens / $15 per run (configurable) |
+| Stuck detection | Identical commits · identical test hash · file churn · no verified progress |
+| Destructive git | Force push, `reset --hard`, `.git` deletion — blocked at shell level |
+| VERIFY exit gate | Every non-failed task must have mech + sem `verified:true` before SHIP |
+| Security gate | OWASP Top 10 + secret scan — `critical`/`high` blocks PR; `medium` annotates PR body |
+
+---
+
+## What's in a run
+
+```
+.claude/swe-team/runs/<run-id>/
+├── run.json              requirement, branch, status
+├── pre-flight-brief.md   clarify output — decisions locked before coding
+├── spec.md               acceptance criteria (DEFINE phase)
+├── tasks.json            the plan (append-only, never rewritten)
+├── phase_state.json      current phase, active task, counters
+├── events.jsonl          every phase transition, replan, abort
+├── build/
+│   └── task-<id>.jsonl   per-task coder actions + observations
+├── verification.jsonl    mech + sem + security verdicts
+└── pr.json               final PR url, number, branch
+
+.claude/swe-team/
+└── learnings.jsonl       persistent lessons across all runs (gitignored)
+```
+
+Inspect a run:
+
+```bash
+# All verdicts
+jq -c '{task:.task_id, tier, ok:.verified}' .claude/swe-team/runs/current/verification.jsonl
+
+# Security issues from last run
+jq -c 'select(.kind=="security_review") | .security_issues[]' \
+  .claude/swe-team/runs/current/verification.jsonl
+
+# Lessons learned so far
+cat .claude/swe-team/learnings.jsonl | jq -r '"[\(.scope)] \(.lesson)"'
+```
+
+---
+
+## Configuration
+
+`swe-team.config.json` at your project root (auto-generated at install). Key options:
+
+```jsonc
+{
+  "clarify": {
+    "mode": "autonomous"      // or "interactive" to answer questions yourself
+  },
+  "security": {
+    "fail_on": ["critical", "high"],   // what severity blocks the PR
+    "warn_on": ["medium"]              // what severity annotates the PR body
+  },
+  "retro": {
+    "enabled": true,
+    "learnings_window": 10    // how many past lessons swe-lead reads at startup
+  },
+  "budget": {
+    "max_usd": 15.00,         // hard stop
+    "warn_pct": 80            // emit warning at 80%
+  }
+}
+```
+
+Full schema: `.claude/references/config-schema.json`. Spec: `SPEC.md §10`.
+
+---
+
+## Package layout
 
 ```
 swe-team/
-├── SPEC.md                     Single Source of Truth. Read first.
-├── VERSION                     Package version.
-├── README.md                   This file.
-├── CLAUDE.md                   Project memory (added by research pass).
+├── SPEC.md                   Single Source of Truth — read this first
 ├── scripts/
-│   ├── install.sh              Drop into a target repo.
-│   └── uninstall.sh            Reverse it.
+│   ├── install.sh            installer (stack auto-detect, settings merge)
+│   └── uninstall.sh          reverses install
 ├── .claude/
-│   ├── settings.json           Hook registration.
-│   ├── commands/swe-team.md    /swe-team slash command.
-│   ├── agents/                 5 subagent definitions (lead, coder, 2 verifiers, pr).
-│   ├── skills/                 12 skills (addyosmani format).
-│   ├── references/             JSON schemas + commit/PR/security conventions.
-│   ├── hooks/                  6 shell scripts for guards + event logging.
-│   └── swe-team/
-│       ├── VERSION             Installed version marker.
-│       ├── config.default.json Config template.
-│       └── runs/               Per-run audit trail (gitignored).
-├── docs/                       Design docs, research, eval (populated by research pass).
-├── examples/
-│   └── sample-requirement.md
-└── tests/
-    └── smoke/                  Shell tests for schemas, hooks, installer.
+│   ├── agents/               5 subagent definitions
+│   ├── skills/               16 skills (addyosmani format)
+│   ├── hooks/                6 shell scripts (guards + event logging)
+│   ├── commands/swe-team.md  /swe-team slash command
+│   └── references/           JSON schemas + commit/PR/security conventions
+├── docs/                     AGENT_DESIGN · ANTI_PATTERNS · EVAL · TELEMETRY
+├── tests/smoke/              schema · hook · installer tests
+└── examples/
+    └── sample-requirement.md
 ```
 
-## The 5 agents
-
-| Agent | Model | Role |
-|---|---|---|
-| `swe-lead` | Opus | Orchestrates phases (DEFINE → PLAN → BUILD → VERIFY → SHIP). Only agent that re-plans. |
-| `swe-coder` | Sonnet | One task → one commit. Never touches files outside the task's declared `touch_files`. |
-| `swe-verifier-mech` | Haiku | Deterministic: runs tests/lint/typecheck, computes assertion delta, checks for deleted tests and added `.skip`/`.only`. Evidence or verdict is invalid. |
-| `swe-verifier-sem` | Sonnet | Acceptance matching with `file:line` citations; scope audit; adversarial review. Blocked unless mech passed. |
-| `swe-pr` | Sonnet | Composes the PR body from run state; `gh pr create`. No force-push. |
-
-Full allowlists and body prompts in `.claude/agents/`.
-
-## Guards (from `SPEC.md §8`)
-
-- Iteration cap per task: S=2, M=4, L=6.
-- Re-plan cap: 2 per run.
-- Token ceiling: 2M per run. USD ceiling: $15.
-- "Stuck" detection: identical commits, identical test output hash, file churn, no verified progress.
-- Destructive git commands blocked at the shell (force push, `reset --hard`, `.git` deletion).
-- VERIFY phase cannot exit unless every non-failed task has both mech and sem verifications with `verified: true`.
-
-## Event log = source of truth
-
-The model's conversation context is not the record. `.claude/swe-team/runs/<run-id>/events.jsonl` (plus `build/task-*.jsonl` and `verification.jsonl`) is. Every agent re-reads it each turn. Every claim of "work done" must be backed by a `verification` event with recomputable evidence. No evidence → no progress.
-
-Analyse a run:
-
-```bash
-jq -c 'select(.kind=="verification") | {task: .task_id, tier, verified}' \
-  .claude/swe-team/runs/<run-id>/verification.jsonl
-```
+---
 
 ## Development
 
 ```bash
-# Smoke tests
-./tests/smoke/run-all.sh
+./tests/smoke/run-all.sh   # 3 suites: schemas · hooks · installer
 ```
-
-Tests cover: JSON schema validity, example documents validate, each hook script behaves (including block/allow cases), installer produces a correct layout, uninstaller cleans up.
 
 ## Spec discipline
 
-- `SPEC.md` is the Single Source of Truth. All agents, skills, hooks, and scripts derive from it.
-- If you find a mismatch: update `SPEC.md` first, update the code to match.
-- Never fix code-spec drift by silently rewriting the spec to match the code. Raise the disagreement, decide, update spec, then code.
+`SPEC.md` is the Single Source of Truth. If spec and code disagree, the code is wrong.  
+To change behaviour: update the spec first, then the code, in the same commit.
 
 ## License
 
-TBD (MIT expected).
+MIT
