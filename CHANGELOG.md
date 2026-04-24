@@ -2,6 +2,16 @@
 
 All notable changes to this package are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Changed
+
+- `README.md` — full rewrite: comparison table vs `addyosmani/agent-skills`, `garrytan/gstack`,
+  `aider`, `OpenHands`; verified pixel-perfect ASCII pipeline flow diagram; "Learn more" links to
+  per-topic docs instead of embedding everything inline. Cut from 224 → 92 lines.
+
+---
+
 ## [0.3.1] — 2026-04-24
 
 Interactive setup wizard — teammates can configure swe-team via conversation, not JSON.
